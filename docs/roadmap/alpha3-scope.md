@@ -25,3 +25,11 @@ Allow an explicit, user-initiated native bridge lifecycle check on a physical An
 - reducer/lifecycle tests cover mode transitions;
 - CI verifies APK/native payloads and publishes a prerelease;
 - release notes clearly state that bypass is not implemented yet.
+
+## Android runtime gate
+
+The release candidate must also pass an x86_64 Android emulator smoke test that loads the packaged shared library and exercises JNI version, controlled invalid-fd failure and idempotent stop paths.
+
+The CI job uses one explicit `ANDROID_AVD_HOME` for both `avdmanager` and `emulator`. This is required because recent command-line tools can otherwise create the AVD in a directory that the emulator does not search. The job records the resolved AVD list, acceleration report, emulator output and bounded ADB diagnostics for every run.
+
+A successful emulator smoke test does not replace the physical-device gate for repeated real TUN start/stop/revoke testing on arm64 hardware.
