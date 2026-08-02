@@ -30,8 +30,10 @@ Allow an explicit, user-initiated native bridge lifecycle check on a physical An
 
 The release candidate must also pass an x86_64 Android emulator smoke test that loads the packaged shared library and exercises JNI version, controlled invalid-fd failure and idempotent stop paths.
 
-The smoke workflow is split into two jobs. The first job builds and verifies the locked native payload with Go and Android NDK. The second job starts from a clean runner, downloads only that verified payload and installs the emulator image. Keeping NDK and AVD storage on separate runners prevents the emulator's mandatory userdata image from exhausting the hosted runner disk.
+The registered `Android CI` pipeline contains two dependent jobs. The first job verifies Go checksums, builds both Android ABIs, runs unit tests and lint, assembles the APK and uploads the native payload. The second job runs on a fresh hosted runner, downloads that exact payload, removes preinstalled NDK/system-image caches that are unnecessary at runtime, creates the AVD and executes the instrumentation test.
 
-The runtime job uses one explicit `ANDROID_AVD_HOME` for both `avdmanager` and `emulator`. It records available disk space, the resolved AVD list, acceleration report, emulator output and bounded ADB diagnostics for every run.
+Separating build and runtime prevents the emulator's mandatory userdata image from competing with the NDK for the same runner disk. One explicit `ANDROID_AVD_HOME` is used for both `avdmanager` and `emulator`; available disk, AVD resolution, acceleration, emulator output and bounded ADB diagnostics are recorded.
+
+The alpha.3 release workflow repeats the same clean-runner runtime gate before publishing the tag and assets.
 
 A successful emulator smoke test does not replace the physical-device gate for repeated real TUN start/stop/revoke testing on arm64 hardware.
