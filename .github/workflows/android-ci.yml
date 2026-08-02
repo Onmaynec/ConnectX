@@ -100,13 +100,16 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    env:
-      ANDROID_AVD_HOME: ${{ runner.temp }}/connectx-avd
-      ANDROID_USER_HOME: ${{ runner.temp }}/connectx-android-user
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Configure Android runtime paths
+        shell: bash
+        run: |
+          echo "ANDROID_AVD_HOME=$RUNNER_TEMP/connectx-avd" >> "$GITHUB_ENV"
+          echo "ANDROID_USER_HOME=$RUNNER_TEMP/connectx-android-user" >> "$GITHUB_ENV"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -161,7 +164,6 @@ jobs:
             --name connectx-ci \
             --path "$ANDROID_AVD_HOME/connectx-ci.avd" \
             --package "system-images;android-35;google_apis;x86_64"
-
           "$ANDROID_SDK_ROOT/emulator/emulator" -list-avds | tee avd-list.txt
           grep -qx 'connectx-ci' avd-list.txt
           df -h / | tee disk-before-emulator.txt
@@ -171,7 +173,6 @@ jobs:
         run: |
           ADB="$ANDROID_SDK_ROOT/platform-tools/adb"
           EMULATOR="$ANDROID_SDK_ROOT/emulator/emulator"
-
           nohup "$EMULATOR" \
             -avd connectx-ci \
             -accel on \
@@ -184,11 +185,10 @@ jobs:
             -no-metrics \
             -gpu swiftshader_indirect \
             > emulator.log 2>&1 &
-          EMULATOR_PID=$!
-          echo "$EMULATOR_PID" > emulator.pid
+          echo "$!" > emulator.pid
 
           sleep 5
-          if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
+          if ! kill -0 "$(cat emulator.pid)" 2>/dev/null; then
             cat disk-before-emulator.txt 2>/dev/null || true
             cat accel-check.txt 2>/dev/null || true
             cat avd-list.txt 2>/dev/null || true
@@ -198,31 +198,20 @@ jobs:
 
           "$ADB" start-server
           timeout 300 "$ADB" wait-for-device
-
           DEADLINE=$((SECONDS + 300))
-          while true; do
-            BOOT_COMPLETED="$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
-            if [[ "$BOOT_COMPLETED" == "1" ]]; then
-              break
-            fi
-            if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
-              echo "Android emulator exited before boot completed" >&2
+          until [[ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; do
+            if ! kill -0 "$(cat emulator.pid)" 2>/dev/null; then
               cat disk-before-emulator.txt 2>/dev/null || true
               cat emulator.log
               exit 1
             fi
             if (( SECONDS >= DEADLINE )); then
-              echo "Timed out waiting for Android boot" >&2
               cat disk-before-emulator.txt 2>/dev/null || true
               cat emulator.log
               exit 1
             fi
             sleep 5
           done
-
-          "$ADB" shell settings put global window_animation_scale 0
-          "$ADB" shell settings put global transition_animation_scale 0
-          "$ADB" shell settings put global animator_duration_scale 0
           "$ADB" shell getprop ro.product.cpu.abi
           "$ADB" shell getprop ro.build.version.sdk
 
