@@ -1,0 +1,108 @@
+name: Publish v0.2.0-alpha.2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+       contains(github.event.head_commit.message, '[publish-v0.2.0-alpha.2]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TAG_NAME: v0.2.0-alpha.2
+      APK_NAME: ConnectX-v0.2.0-alpha.2-debug.apk
+      NATIVE_ARCHIVE: ConnectX-v0.2.0-alpha.2-native.zip
+
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Go 1.26.3
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.3'
+          cache-dependency-path: engine/go/go.mod
+
+      - name: Install locked Android NDK
+        shell: bash
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;28.0.13004108"
+
+      - name: Test and build native bridge
+        shell: bash
+        run: |
+          cd engine/go
+          VERSION="$(sed -n 's/^version=//p' upstream.lock)"
+          go get "github.com/xjasonlyu/tun2socks/v2@${VERSION}"
+          go mod tidy
+          go test ./bridge
+          cd ../..
+          chmod +x engine/go/build-android.sh
+          engine/go/build-android.sh "$ANDROID_SDK_ROOT/ndk/28.0.13004108"
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Run JVM tests and lint
+        run: |
+          gradle test --no-daemon
+          gradle lintDebug --no-daemon
+
+      - name: Build debug APK
+        run: gradle :app:assembleDebug --no-daemon
+
+      - name: Prepare and verify release assets
+        shell: bash
+        run: |
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | tee apk-contents.txt
+          grep -q 'lib/arm64-v8a/libconnectxbridge.so' apk-contents.txt
+          grep -q 'lib/x86_64/libconnectxbridge.so' apk-contents.txt
+
+          cp app/build/outputs/apk/debug/app-debug.apk "$APK_NAME"
+          (cd engine/go/build/android && zip -r "$GITHUB_WORKSPACE/$NATIVE_ARCHIVE" .)
+          cp THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES-v0.2.0-alpha.2.md
+          cp licenses/tun2socks-MIT.txt tun2socks-MIT.txt
+          sha256sum \
+            "$APK_NAME" \
+            "$NATIVE_ARCHIVE" \
+            THIRD_PARTY_NOTICES-v0.2.0-alpha.2.md \
+            tun2socks-MIT.txt \
+            > CHECKSUMS.txt
+
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release $TAG_NAME already exists; nothing to do."
+            exit 0
+          fi
+
+          gh release create "$TAG_NAME" \
+            "$APK_NAME" \
+            "$NATIVE_ARCHIVE" \
+            CHECKSUMS.txt \
+            THIRD_PARTY_NOTICES-v0.2.0-alpha.2.md \
+            tun2socks-MIT.txt \
+            --target "$GITHUB_SHA" \
+            --title "ConnectX v0.2.0-alpha.2 — Native Bridge Preview" \
+            --notes-file docs/releases/v0.2.0-alpha.2.md \
+            --prerelease
