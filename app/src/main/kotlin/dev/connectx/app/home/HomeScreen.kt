@@ -18,6 +18,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,11 +30,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.connectx.core.model.ConnectionState
 import dev.connectx.core.model.ConnectionUiState
+import dev.connectx.core.model.EngineMode
 
 @Composable
 fun HomeScreen(
     uiState: ConnectionUiState,
     onToggle: () -> Unit,
+    onNativeSelfTest: () -> Unit,
 ) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -66,9 +69,10 @@ fun HomeScreen(
 
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = statusTitle(uiState.state),
+                    text = statusTitle(uiState),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
                 )
                 Spacer(modifier = Modifier.height(18.dp))
                 Button(
@@ -115,16 +119,35 @@ fun HomeScreen(
                 Box(modifier = Modifier.padding(20.dp)) {
                     Column {
                         Text(
-                            text = "Native bridge · v0.2.0-a2",
+                            text = "Native self-test · v0.2.0-a3",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "В APK добавлен собранный из исходников TUN→gVisor bridge для arm64 и x86_64. Он пока выключен: обычный трафик не перехватывается до проверки запуска, остановки и владения fd на реальном устройстве.",
+                            text = diagnosticsText(uiState),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedButton(
+                            onClick = onNativeSelfTest,
+                            enabled = uiState.diagnostics.available == true &&
+                                uiState.state in setOf(
+                                    ConnectionState.OFF,
+                                    ConnectionState.ERROR,
+                                ),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = when (uiState.diagnostics.available) {
+                                    true -> "Запустить native self-test"
+                                    false -> "Native bridge недоступен"
+                                    null -> "Проверка native bridge"
+                                },
+                                textAlign = TextAlign.Center,
+                            )
+                        }
                     }
                 }
             }
@@ -132,11 +155,21 @@ fun HomeScreen(
     }
 }
 
-private fun statusTitle(state: ConnectionState): String = when (state) {
+private fun statusTitle(uiState: ConnectionUiState): String = when (uiState.state) {
     ConnectionState.OFF -> "Выключено"
     ConnectionState.PERMISSION_REQUIRED -> "Нужно системное разрешение"
-    ConnectionState.STARTING -> "Запуск TCP-ядра"
-    ConnectionState.LOCAL_TUN_ACTIVE -> "TCP-ядро готово"
+    ConnectionState.STARTING -> if (uiState.mode == EngineMode.NATIVE_SELF_TEST) {
+        "Запуск native self-test"
+    } else {
+        "Запуск TCP-ядра"
+    }
+
+    ConnectionState.LOCAL_TUN_ACTIVE -> if (uiState.mode == EngineMode.NATIVE_SELF_TEST) {
+        "Native self-test активен"
+    } else {
+        "TCP-ядро готово"
+    }
+
     ConnectionState.STOPPING -> "Остановка"
     ConnectionState.ERROR -> "Ошибка"
 }
@@ -151,4 +184,23 @@ private fun actionTitle(state: ConnectionState): String = when (state) {
     ConnectionState.OFF,
     ConnectionState.ERROR,
     -> "Включить"
+}
+
+private fun diagnosticsText(uiState: ConnectionUiState): String {
+    val diagnostics = uiState.diagnostics
+    val availability = when (diagnostics.available) {
+        true -> "Библиотека загружена"
+        false -> "Библиотека недоступна"
+        null -> "Библиотека ещё не проверена"
+    }
+    val details = listOfNotNull(
+        diagnostics.version?.let { "Версия: $it" },
+        diagnostics.abi?.let { "ABI: $it" },
+        diagnostics.lastResult,
+    ).joinToString(separator = "\n")
+
+    val safety = "Self-test использует только 192.0.2.0/24 и не перехватывает обычный интернет-трафик."
+    return listOf(availability, details, safety)
+        .filter { it.isNotBlank() }
+        .joinToString(separator = "\n")
 }
