@@ -21,5 +21,6 @@ include(
     ":core:model",
     ":core:designsystem",
     ":vpn:api",
+    ":vpn:relay",
     ":vpn:service",
 )
