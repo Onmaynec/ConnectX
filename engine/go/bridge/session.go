@@ -43,7 +43,7 @@ var (
 )
 
 func Version() string {
-	return "connectx-go-bridge/0.2.0-alpha.2 upstream/" + upstreamCommit
+	return "connectx-go-bridge/0.2.0-alpha.3 upstream/" + upstreamCommit
 }
 
 // Start creates a userspace TCP/IP stack connected to an authenticated local
@@ -127,21 +127,22 @@ func Start(
 	return CodeOK, nil
 }
 
-// Stop is idempotent and serializes full shutdown against a new Start call.
+// Stop is serialized with Start and idempotently releases the native stack,
+// tunnel workers and the duplicated TUN descriptor.
 func Stop() error {
 	stateMu.Lock()
 	defer stateMu.Unlock()
 
-	if active == nil {
+	session := active
+	active = nil
+	if session == nil {
 		return nil
 	}
 
-	session := active
 	session.tunnel.Close()
-	session.device.Close()
 	session.stack.Close()
 	session.stack.Wait()
-	active = nil
+	session.device.Close()
 	return nil
 }
 
