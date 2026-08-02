@@ -6,10 +6,31 @@ All notable changes to ConnectX are documented in this file.
 
 ### Planned
 
-- Physical-device JNI and TUN fd lifecycle verification.
-- Controlled TEST-NET traffic through the native stack.
+- Physical-device repeated TUN lifecycle verification.
 - Direct UDP and DNS passthrough.
 - First verified DPI-obfuscation strategy.
+
+## [0.2.0-alpha.3]
+
+### Added
+
+- Explicit user-initiated `Native self-test` mode.
+- Authenticated relay + TEST-NET TUN + native gVisor bridge lifecycle.
+- ABI, native version and self-test result diagnostics in the existing UI.
+- Mode-aware status broadcasts and reducer transitions.
+- Native session shutdown before TUN and relay teardown.
+- Bounded JNI runtime smoke report with controlled invalid-fd failure.
+- x86_64 Android emulator CI gate that loads the real `.so` and calls JNI.
+- Emulator diagnostics and instrumentation test artifacts.
+
+### Safety boundaries
+
+- Native self-test requires explicit user action and Android VPN permission.
+- TUN capture remains limited to TEST-NET-1 (`192.0.2.0/24`).
+- No default IPv4/IPv6 routes are added.
+- Ordinary application traffic is not routed through the unfinished engine.
+- UDP, DNS passthrough, IPv6, QUIC and DPI obfuscation are not implemented.
+- No SOCKS credentials or traffic contents are exposed in diagnostics.
 
 ## [0.2.0-alpha.2]
 
