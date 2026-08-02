@@ -84,7 +84,7 @@ class DirectTcpRelay(
         if (!running.getAndSet(false)) return
 
         serverSocketReference.getAndSet(null).closeQuietly()
-        activeSockets.toList().forEach(Socket::closeQuietly)
+        activeSockets.toList().forEach { socket -> socket.closeQuietly() }
         activeSockets.clear()
 
         acceptThreadReference.getAndSet(null)?.let { thread ->
@@ -251,7 +251,7 @@ class DirectTcpRelay(
     private fun daemonThread(
         name: String,
         block: () -> Unit,
-    ): Thread = Thread(block, name).apply {
+    ): Thread = Thread({ block() }, name).apply {
         isDaemon = true
     }
 
