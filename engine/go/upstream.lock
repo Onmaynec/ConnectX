@@ -1,4 +1,5 @@
 repository=https://github.com/xjasonlyu/tun2socks.git
+version=v2.7.0
 commit=8dda19e8e4613e014f0b12f3e624fdff5e5f23b3
 license=MIT
 go=1.26.3
