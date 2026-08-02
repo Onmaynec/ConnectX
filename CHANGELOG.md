@@ -6,31 +6,28 @@ All notable changes to ConnectX are documented in this file.
 
 ### Planned
 
-- Source-built tun2socks/gVisor bridge from the Android TUN fd.
-- Direct UDP relay and DNS passthrough.
+- Source-built tun2socks/gVisor bridge from the Android TUN descriptor to the local relay.
+- Direct UDP and DNS passthrough.
 - First verified DPI-obfuscation strategy.
 
 ## [0.2.0-alpha.1]
 
 ### Added
 
-- Pure Kotlin local SOCKS5 `CONNECT` relay.
-- Direct outbound TCP sockets protected through `VpnService.protect()`.
-- Bounded concurrent connection count.
-- Bidirectional byte forwarding and aggregate relay statistics.
-- SOCKS5 parser unit tests.
-- End-to-end relay test using a local echo server.
-- Architecture decision record for the userspace engine.
-- App version metadata and UI text for the engine alpha.
+- Local SOCKS5 `CONNECT` relay bound to loopback.
+- Mandatory per-run random SOCKS5 credentials; invalid clients cannot reach `VpnService.protect()` or open outbound sockets.
+- Direct protected TCP sockets to real destinations without a ConnectX server.
+- Bounded concurrent connections, bidirectional relay and byte counters.
+- Unit and end-to-end tests with a local echo server.
+- Architecture decision for a source-built tun2socks/gVisor path.
+- Engine-alpha status in the existing ConnectX home-screen design.
 
 ### Safety boundaries
 
-- The Android TUN still captures only TEST-NET-1 (`192.0.2.0/24`).
-- Ordinary application traffic is not connected to the relay yet.
-- The source-built tun2socks/gVisor bridge is still required before enabling the default route.
-- UDP, DNS passthrough, IPv6 and DPI obfuscation are not implemented in this alpha.
-- The local SOCKS endpoint listens only on the device loopback interface.
-- No remote ConnectX proxy or VPN server is used.
+- Ordinary application traffic is not routed into the relay yet.
+- TUN capture remains limited to TEST-NET-1 (`192.0.2.0/24`).
+- UDP, DNS passthrough, IPv6, QUIC and DPI obfuscation are not implemented.
+- HTTPS interception, custom certificates and MITM are not used.
 
 ## [0.1.0]
 
