@@ -198,6 +198,7 @@ jobs:
             -avd connectx-release-ci \
             -accel on \
             -memory 2048 \
+            -partition-size 2048 \
             -no-window \
             -noaudio \
             -no-boot-anim \
