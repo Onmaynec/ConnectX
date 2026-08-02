@@ -1,0 +1,228 @@
+name: Publish v0.2.0-alpha.3
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[publish-v0.2.0-alpha.3]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Go 1.26.3
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.3'
+          cache-dependency-path: |
+            engine/go/go.mod
+            engine/go/go.sum
+
+      - name: Install locked Android NDK
+        shell: bash
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;28.0.13004108"
+
+      - name: Verify and build locked native bridge
+        shell: bash
+        run: |
+          cd engine/go
+          go mod download
+          go mod verify
+          go test -mod=readonly ./bridge
+          git diff --exit-code -- go.mod go.sum
+          cd ../..
+          chmod +x engine/go/build-android.sh
+          engine/go/build-android.sh "$ANDROID_SDK_ROOT/ndk/28.0.13004108"
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Run JVM tests and lint
+        run: |
+          gradle test --no-daemon
+          gradle lintDebug --no-daemon
+
+      - name: Build and verify APK
+        shell: bash
+        run: |
+          gradle :app:assembleDebug --no-daemon
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | tee apk-contents.txt
+          grep -q 'lib/arm64-v8a/libconnectxbridge.so' apk-contents.txt
+          grep -q 'lib/x86_64/libconnectxbridge.so' apk-contents.txt
+          grep -q 'assets/THIRD_PARTY_NOTICES.md' apk-contents.txt
+          grep -q 'assets/tun2socks-MIT.txt' apk-contents.txt
+          grep -q 'assets/gvisor-LICENSE.txt' apk-contents.txt
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          cp app/build/outputs/apk/debug/app-debug.apk \
+            release-assets/ConnectX-v0.2.0-alpha.3-debug.apk
+          (cd engine/go/build/android && \
+            zip -r "$GITHUB_WORKSPACE/release-assets/ConnectX-v0.2.0-alpha.3-native.zip" .)
+          cp THIRD_PARTY_NOTICES.md \
+            release-assets/THIRD_PARTY_NOTICES-v0.2.0-alpha.3.md
+          cp licenses/tun2socks-MIT.txt release-assets/tun2socks-MIT.txt
+          cp licenses/gvisor-LICENSE.txt release-assets/gvisor-LICENSE.txt
+          (cd release-assets && sha256sum * > CHECKSUMS.txt)
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha3-release-assets-${{ github.sha }}
+          path: release-assets
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload native runtime payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha3-native-${{ github.sha }}
+          path: engine/go/build/android
+          if-no-files-found: error
+          retention-days: 14
+
+  android-runtime-smoke:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Download verified native runtime payload
+        uses: actions/download-artifact@v4
+        with:
+          name: alpha3-native-${{ github.sha }}
+          path: engine/go/build/android
+
+      - name: Enable KVM access
+        shell: bash
+        run: |
+          if [[ -e /dev/kvm ]]; then
+            sudo chmod 666 /dev/kvm
+          fi
+
+      - name: Install Android emulator image
+        shell: bash
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "emulator" \
+            "platforms;android-35" \
+            "system-images;android-35;google_apis;x86_64"
+          echo no | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" \
+            create avd \
+            --force \
+            --name connectx-release-ci \
+            --package "system-images;android-35;google_apis;x86_64"
+
+      - name: Start emulator and wait for Android
+        shell: bash
+        run: |
+          nohup "$ANDROID_SDK_ROOT/emulator/emulator" \
+            -avd connectx-release-ci \
+            -no-window \
+            -noaudio \
+            -no-boot-anim \
+            -no-snapshot \
+            -no-metrics \
+            -gpu swiftshader_indirect \
+            > emulator.log 2>&1 &
+          adb wait-for-device
+          timeout 300 bash -c '
+            until [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" == "1" ]]; do
+              sleep 5
+            done
+          '
+
+      - name: Run native bridge Android smoke test
+        run: gradle --no-daemon :vpn:nativebridge:connectedDebugAndroidTest
+
+      - name: Upload emulator diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p emulator-diagnostics
+          cp emulator.log emulator-diagnostics/ 2>/dev/null || true
+          adb logcat -d > emulator-diagnostics/logcat.txt 2>/dev/null || true
+          cp -R vpn/nativebridge/build/reports/androidTests \
+            emulator-diagnostics/reports 2>/dev/null || true
+          cp -R vpn/nativebridge/build/outputs/androidTest-results \
+            emulator-diagnostics/results 2>/dev/null || true
+
+      - name: Store emulator diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha3-emulator-smoke-${{ github.sha }}
+          path: emulator-diagnostics
+          if-no-files-found: warn
+          retention-days: 14
+
+  publish:
+    needs: [verify, android-runtime-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout release notes
+        uses: actions/checkout@v4
+
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: alpha3-release-assets-${{ github.sha }}
+          path: release-assets
+
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: v0.2.0-alpha.3
+        shell: bash
+        run: |
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release $TAG_NAME already exists; nothing to do."
+            exit 0
+          fi
+
+          gh release create "$TAG_NAME" \
+            release-assets/* \
+            --target "$GITHUB_SHA" \
+            --title "ConnectX v0.2.0-alpha.3 — Controlled Native Self-Test" \
+            --notes-file docs/releases/v0.2.0-alpha.3.md \
+            --prerelease
