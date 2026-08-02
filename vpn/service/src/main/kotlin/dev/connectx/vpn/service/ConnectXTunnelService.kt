@@ -185,16 +185,17 @@ class ConnectXTunnelService : VpnService() {
     }
 
     private fun stopTunnelAndService() {
+        val stoppedMode = activeMode
         val cleanupError = closeTunnelResources()
         if (cleanupError == null) {
             publishStatus(
                 status = TunnelContract.STATUS_STOPPED,
-                mode = activeMode,
+                mode = stoppedMode,
             )
         } else {
             publishStatus(
                 status = TunnelContract.STATUS_ERROR,
-                mode = activeMode,
+                mode = stoppedMode,
                 error = "Ресурсы остановлены с ошибкой: ${cleanupError.message ?: cleanupError::class.java.simpleName}",
             )
         }
