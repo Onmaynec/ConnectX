@@ -127,21 +127,21 @@ func Start(
 	return CodeOK, nil
 }
 
-// Stop is idempotent and releases the native stack, tunnel workers and TUN fd.
+// Stop is idempotent and serializes full shutdown against a new Start call.
 func Stop() error {
 	stateMu.Lock()
-	session := active
-	active = nil
-	stateMu.Unlock()
+	defer stateMu.Unlock()
 
-	if session == nil {
+	if active == nil {
 		return nil
 	}
 
+	session := active
 	session.tunnel.Close()
 	session.device.Close()
 	session.stack.Close()
 	session.stack.Wait()
+	active = nil
 	return nil
 }
 
