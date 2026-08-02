@@ -32,7 +32,7 @@ The release candidate must also pass an x86_64 Android emulator smoke test that 
 
 The registered `Android CI` pipeline contains two dependent jobs. The first job verifies Go checksums, builds both Android ABIs, runs unit tests and lint, assembles the APK and uploads the native payload. The second job runs on a fresh hosted runner, downloads that exact payload, removes preinstalled NDK/system-image caches that are unnecessary at runtime, creates the AVD and executes the instrumentation test.
 
-Separating build and runtime prevents the emulator's mandatory userdata image from competing with the NDK for the same runner disk. One explicit `ANDROID_AVD_HOME` is used for both `avdmanager` and `emulator`; available disk, AVD resolution, acceleration, emulator output and bounded ADB diagnostics are recorded.
+Separating build and runtime prevents the emulator's mandatory userdata image from competing with the NDK for the same runner disk. The runtime job writes `ANDROID_AVD_HOME` and `ANDROID_USER_HOME` through the runner-scoped `GITHUB_ENV` file before invoking Android tools. Available disk, AVD resolution, acceleration, emulator output and bounded ADB diagnostics are recorded.
 
 The alpha.3 release workflow repeats the same clean-runner runtime gate before publishing the tag and assets.
 
