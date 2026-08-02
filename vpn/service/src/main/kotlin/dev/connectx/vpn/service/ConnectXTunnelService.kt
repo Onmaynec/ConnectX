@@ -11,10 +11,15 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import dev.connectx.vpn.api.TunnelContract
+import dev.connectx.vpn.relay.DirectTcpRelay
+import dev.connectx.vpn.relay.SocketProtector
+import dev.connectx.vpn.relay.Socks5Credentials
 import java.io.IOException
 
 class ConnectXTunnelService : VpnService() {
     private var tunnelDescriptor: ParcelFileDescriptor? = null
+    private var directTcpRelay: DirectTcpRelay? = null
+    private var relayCredentials: Socks5Credentials? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -35,7 +40,7 @@ class ConnectXTunnelService : VpnService() {
     }
 
     override fun onDestroy() {
-        closeTunnel()
+        closeTunnelAndRelay()
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
@@ -43,18 +48,21 @@ class ConnectXTunnelService : VpnService() {
     private fun startTunnel() {
         promoteToForeground()
 
-        if (tunnelDescriptor != null) {
+        if (tunnelDescriptor != null && directTcpRelay != null) {
             publishStatus(TunnelContract.STATUS_STARTED)
             return
         }
 
         try {
+            startDirectTcpRelay()
+
             tunnelDescriptor = Builder()
-                .setSession("ConnectX Foundation")
+                .setSession("ConnectX v0.2 alpha")
                 .setMtu(DEFAULT_MTU)
                 .addAddress(LOCAL_TUN_ADDRESS, LOCAL_TUN_PREFIX)
-                // Foundation intentionally captures TEST-NET-1 only. Real traffic is not
-                // intercepted until a tested userspace packet engine is implemented.
+                // v0.2.0-alpha.1 keeps TEST-NET-1 routing. The direct TCP relay is
+                // functional, but the source-built tun2socks bridge is the next gate
+                // before ordinary application traffic can safely enter the engine.
                 .addRoute(TEST_ROUTE, TEST_ROUTE_PREFIX)
                 .setBlocking(false)
                 .establish()
@@ -62,32 +70,54 @@ class ConnectXTunnelService : VpnService() {
 
             publishStatus(TunnelContract.STATUS_STARTED)
         } catch (error: Exception) {
-            closeTunnel()
+            closeTunnelAndRelay()
             publishStatus(
                 status = TunnelContract.STATUS_ERROR,
-                error = error.message ?: "Не удалось создать локальный TUN",
+                error = error.message ?: "Не удалось запустить локальный сетевой движок",
             )
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
     }
 
+    private fun startDirectTcpRelay(): Int {
+        directTcpRelay?.let { relay ->
+            return relay.stats().listeningPort
+        }
+
+        val credentials = Socks5Credentials.random()
+        val relay = DirectTcpRelay(
+            socketProtector = SocketProtector { socket ->
+                protect(socket)
+            },
+            credentials = credentials,
+        )
+        val port = relay.start()
+        relayCredentials = credentials
+        directTcpRelay = relay
+        return port
+    }
+
     private fun stopTunnelAndService() {
-        closeTunnel()
+        closeTunnelAndRelay()
         publishStatus(TunnelContract.STATUS_STOPPED)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
-    private fun closeTunnel() {
+    private fun closeTunnelAndRelay() {
         val descriptor = tunnelDescriptor
         tunnelDescriptor = null
         try {
             descriptor?.close()
         } catch (_: IOException) {
-            // The descriptor is already detached from the service state. There is no
-            // safe recovery action required during shutdown.
+            // The descriptor is already detached from the service state.
         }
+
+        val relay = directTcpRelay
+        directTcpRelay = null
+        relayCredentials = null
+        relay?.close()
     }
 
     private fun promoteToForeground() {
@@ -117,7 +147,7 @@ class ConnectXTunnelService : VpnService() {
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
             .setContentTitle("ConnectX")
-            .setContentText("Локальный TUN активен · режим Foundation")
+            .setContentText("Защищённый TCP relay готов · тестовый маршрут")
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)

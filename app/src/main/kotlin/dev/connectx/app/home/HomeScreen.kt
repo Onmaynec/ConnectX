@@ -115,13 +115,13 @@ fun HomeScreen(
                 Box(modifier = Modifier.padding(20.dp)) {
                     Column {
                         Text(
-                            text = "Foundation · v0.1.0",
+                            text = "Engine alpha · v0.2.0-a1",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "Эта версия проверяет разрешение Android и безопасный жизненный цикл локального TUN. Она не направляет трафик на сервер ConnectX и пока не включает DPI-обфускацию.",
+                            text = "Добавлен локальный TCP relay с защищёнными исходящими сокетами. Сейчас активен только безопасный тестовый маршрут; обычный трафик будет подключён после сборки и проверки tun2socks-моста.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -135,8 +135,8 @@ fun HomeScreen(
 private fun statusTitle(state: ConnectionState): String = when (state) {
     ConnectionState.OFF -> "Выключено"
     ConnectionState.PERMISSION_REQUIRED -> "Нужно системное разрешение"
-    ConnectionState.STARTING -> "Создание локального TUN"
-    ConnectionState.LOCAL_TUN_ACTIVE -> "Локальный TUN активен"
+    ConnectionState.STARTING -> "Запуск TCP-ядра"
+    ConnectionState.LOCAL_TUN_ACTIVE -> "TCP-ядро готово"
     ConnectionState.STOPPING -> "Остановка"
     ConnectionState.ERROR -> "Ошибка"
 }
