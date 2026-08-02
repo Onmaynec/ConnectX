@@ -10,12 +10,13 @@ read_lock() {
   sed -n "s/^${key}=//p" "$LOCK_FILE" | head -n 1
 }
 
+UPSTREAM_VERSION="$(read_lock version)"
 UPSTREAM_COMMIT="$(read_lock commit)"
 GO_VERSION="$(read_lock go)"
 ANDROID_API="$(read_lock android_api)"
 LOCKED_NDK_VERSION="$(read_lock ndk)"
 
-if [[ -z "$UPSTREAM_COMMIT" || -z "$GO_VERSION" || -z "$ANDROID_API" ]]; then
+if [[ -z "$UPSTREAM_VERSION" || -z "$UPSTREAM_COMMIT" || -z "$GO_VERSION" || -z "$ANDROID_API" ]]; then
   echo "Invalid upstream.lock" >&2
   exit 1
 fi
@@ -41,12 +42,12 @@ fi
 cd "$SCRIPT_DIR"
 export GOTOOLCHAIN="go${GO_VERSION}"
 
-# Resolve exactly the locked commit. The resulting pseudo-version must end in
-# the same commit prefix, otherwise the build is rejected.
-go get "github.com/xjasonlyu/tun2socks/v2@${UPSTREAM_COMMIT}"
+# Resolve the exact tagged upstream release. The corresponding commit SHA is
+# recorded separately in upstream.lock for source auditing.
+go get "github.com/xjasonlyu/tun2socks/v2@${UPSTREAM_VERSION}"
 go mod tidy
 RESOLVED_VERSION="$(go list -m -f '{{.Version}}' github.com/xjasonlyu/tun2socks/v2)"
-if [[ "$RESOLVED_VERSION" != *-"${UPSTREAM_COMMIT:0:12}" ]]; then
+if [[ "$RESOLVED_VERSION" != "$UPSTREAM_VERSION" ]]; then
   echo "Resolved unexpected tun2socks version: $RESOLVED_VERSION" >&2
   exit 1
 fi
@@ -82,8 +83,6 @@ build_abi() {
 build_abi "arm64-v8a" "arm64" "aarch64-linux-android"
 build_abi "x86_64" "amd64" "x86_64-linux-android"
 
-# c-shared emits one C header next to each library. Keep one copy for ABI
-# inspection and remove duplicate headers from packaged jniLibs directories.
 HEADER_SOURCE="$OUTPUT_ROOT/jniLibs/arm64-v8a/libconnectxbridge.h"
 if [[ -f "$HEADER_SOURCE" ]]; then
   cp "$HEADER_SOURCE" "$OUTPUT_ROOT/include/libconnectxbridge.h"
@@ -91,6 +90,7 @@ fi
 find "$OUTPUT_ROOT/jniLibs" -name '*.h' -delete
 
 cat > "$OUTPUT_ROOT/metadata/build.txt" <<META
+upstream_version=$UPSTREAM_VERSION
 upstream_commit=$UPSTREAM_COMMIT
 resolved_version=$RESOLVED_VERSION
 go_version=$GO_VERSION
