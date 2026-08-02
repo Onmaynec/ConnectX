@@ -64,15 +64,16 @@ func readJavaString(env *C.JNIEnv, value C.jstring) string {
 //export Java_dev_connectx_vpn_nativebridge_NativeTunBridge_nativeVersion
 func Java_dev_connectx_vpn_nativebridge_NativeTunBridge_nativeVersion(
 	env *C.JNIEnv,
-	_ C.jclass,
+	clazz C.jclass,
 ) C.jstring {
+	_ = clazz
 	return newJavaString(env, bridge.Version())
 }
 
 //export Java_dev_connectx_vpn_nativebridge_NativeTunBridge_nativeStart
 func Java_dev_connectx_vpn_nativebridge_NativeTunBridge_nativeStart(
 	env *C.JNIEnv,
-	_ C.jclass,
+	clazz C.jclass,
 	tunFD C.jint,
 	mtu C.jint,
 	host C.jstring,
@@ -80,6 +81,7 @@ func Java_dev_connectx_vpn_nativebridge_NativeTunBridge_nativeStart(
 	username C.jstring,
 	password C.jstring,
 ) C.jint {
+	_ = clazz
 	code, err := bridge.Start(
 		int(tunFD),
 		int(mtu),
@@ -94,9 +96,11 @@ func Java_dev_connectx_vpn_nativebridge_NativeTunBridge_nativeStart(
 
 //export Java_dev_connectx_vpn_nativebridge_NativeTunBridge_nativeStop
 func Java_dev_connectx_vpn_nativebridge_NativeTunBridge_nativeStop(
-	_ *C.JNIEnv,
-	_ C.jclass,
+	env *C.JNIEnv,
+	clazz C.jclass,
 ) C.jint {
+	_ = env
+	_ = clazz
 	err := bridge.Stop()
 	setLastError(err)
 	if err != nil {
@@ -107,9 +111,11 @@ func Java_dev_connectx_vpn_nativebridge_NativeTunBridge_nativeStop(
 
 //export Java_dev_connectx_vpn_nativebridge_NativeTunBridge_nativeIsRunning
 func Java_dev_connectx_vpn_nativebridge_NativeTunBridge_nativeIsRunning(
-	_ *C.JNIEnv,
-	_ C.jclass,
+	env *C.JNIEnv,
+	clazz C.jclass,
 ) C.jboolean {
+	_ = env
+	_ = clazz
 	if bridge.IsRunning() {
 		return C.jboolean(1)
 	}
@@ -119,8 +125,9 @@ func Java_dev_connectx_vpn_nativebridge_NativeTunBridge_nativeIsRunning(
 //export Java_dev_connectx_vpn_nativebridge_NativeTunBridge_nativeLastError
 func Java_dev_connectx_vpn_nativebridge_NativeTunBridge_nativeLastError(
 	env *C.JNIEnv,
-	_ C.jclass,
+	clazz C.jclass,
 ) C.jstring {
+	_ = clazz
 	return newJavaString(env, getLastError())
 }
 
