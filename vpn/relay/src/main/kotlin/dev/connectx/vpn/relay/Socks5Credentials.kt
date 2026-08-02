@@ -4,7 +4,7 @@ import java.security.SecureRandom
 import java.util.Base64
 
 /** Process-scoped credentials for the loopback SOCKS5 endpoint. */
-data class Socks5Credentials(
+class Socks5Credentials(
     val username: String,
     val password: String,
 ) {
@@ -16,6 +16,9 @@ data class Socks5Credentials(
             "SOCKS5 password must contain 1..255 UTF-8 bytes"
         }
     }
+
+    override fun toString(): String =
+        "Socks5Credentials(username=$username, password=<redacted>)"
 
     companion object {
         private const val RANDOM_SECRET_BYTES = 32
