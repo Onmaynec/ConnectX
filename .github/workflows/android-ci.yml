@@ -36,7 +36,7 @@ jobs:
           yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;28.0.13004108"
 
-      - name: Test locked Go bridge lifecycle
+      - name: Generate and test Go dependency lock
         working-directory: engine/go
         shell: bash
         run: |
@@ -44,6 +44,16 @@ jobs:
           git diff --exit-code -- go.mod
           go mod verify
           go test ./bridge
+
+      - name: Upload generated Go lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: connectx-go-lock-${{ github.sha }}
+          path: |
+            engine/go/go.mod
+            engine/go/go.sum
+          if-no-files-found: error
+          retention-days: 2
 
       - name: Build Android native bridge
         shell: bash
