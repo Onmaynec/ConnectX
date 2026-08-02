@@ -1,0 +1,6 @@
+repository=https://github.com/xjasonlyu/tun2socks.git
+commit=8dda19e8e4613e014f0b12f3e624fdff5e5f23b3
+license=MIT
+go=1.26.3
+android_api=29
+ndk=28.0.13004108
