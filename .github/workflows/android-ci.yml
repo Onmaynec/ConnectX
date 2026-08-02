@@ -138,6 +138,8 @@ jobs:
             "emulator" \
             "platforms;android-35" \
             "system-images;android-35;google_apis;x86_64"
+          test -x "$ANDROID_SDK_ROOT/platform-tools/adb"
+          test -x "$ANDROID_SDK_ROOT/emulator/emulator"
           echo no | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" \
             create avd \
             --force \
@@ -147,7 +149,10 @@ jobs:
       - name: Start emulator and wait for Android
         shell: bash
         run: |
-          nohup "$ANDROID_SDK_ROOT/emulator/emulator" \
+          ADB="$ANDROID_SDK_ROOT/platform-tools/adb"
+          EMULATOR="$ANDROID_SDK_ROOT/emulator/emulator"
+
+          nohup "$EMULATOR" \
             -avd connectx-ci \
             -no-window \
             -noaudio \
@@ -156,18 +161,42 @@ jobs:
             -no-metrics \
             -gpu swiftshader_indirect \
             > emulator.log 2>&1 &
+          EMULATOR_PID=$!
+          echo "$EMULATOR_PID" > emulator.pid
 
-          adb wait-for-device
-          timeout 300 bash -c '
-            until [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" == "1" ]]; do
-              sleep 5
-            done
-          '
-          adb shell settings put global window_animation_scale 0
-          adb shell settings put global transition_animation_scale 0
-          adb shell settings put global animator_duration_scale 0
-          adb shell getprop ro.product.cpu.abi
-          adb shell getprop ro.build.version.sdk
+          sleep 5
+          if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
+            cat emulator.log
+            exit 1
+          fi
+
+          "$ADB" start-server
+          timeout 300 "$ADB" wait-for-device
+
+          DEADLINE=$((SECONDS + 300))
+          while true; do
+            BOOT_COMPLETED="$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+            if [[ "$BOOT_COMPLETED" == "1" ]]; then
+              break
+            fi
+            if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
+              echo "Android emulator exited before boot completed" >&2
+              cat emulator.log
+              exit 1
+            fi
+            if (( SECONDS >= DEADLINE )); then
+              echo "Timed out waiting for Android boot" >&2
+              cat emulator.log
+              exit 1
+            fi
+            sleep 5
+          done
+
+          "$ADB" shell settings put global window_animation_scale 0
+          "$ADB" shell settings put global transition_animation_scale 0
+          "$ADB" shell settings put global animator_duration_scale 0
+          "$ADB" shell getprop ro.product.cpu.abi
+          "$ADB" shell getprop ro.build.version.sdk
 
       - name: Run native bridge Android smoke test
         run: gradle --no-daemon :vpn:nativebridge:connectedDebugAndroidTest
@@ -176,9 +205,12 @@ jobs:
         if: always()
         shell: bash
         run: |
+          ADB="$ANDROID_SDK_ROOT/platform-tools/adb"
           mkdir -p emulator-diagnostics
           cp emulator.log emulator-diagnostics/ 2>/dev/null || true
-          adb logcat -d > emulator-diagnostics/logcat.txt 2>/dev/null || true
+          cp emulator.pid emulator-diagnostics/ 2>/dev/null || true
+          "$ADB" devices -l > emulator-diagnostics/devices.txt 2>/dev/null || true
+          "$ADB" logcat -d > emulator-diagnostics/logcat.txt 2>/dev/null || true
           cp -R vpn/nativebridge/build/reports/androidTests emulator-diagnostics/reports 2>/dev/null || true
           cp -R vpn/nativebridge/build/outputs/androidTest-results emulator-diagnostics/results 2>/dev/null || true
 
