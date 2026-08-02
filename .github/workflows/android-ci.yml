@@ -95,3 +95,98 @@ jobs:
           path: engine/go/build/android
           if-no-files-found: error
           retention-days: 14
+
+  android-runtime-smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+
+      - name: Download verified native bridge
+        uses: actions/download-artifact@v4
+        with:
+          name: connectx-native-${{ github.sha }}
+          path: engine/go/build/android
+
+      - name: Enable KVM access
+        shell: bash
+        run: |
+          if [[ -e /dev/kvm ]]; then
+            sudo chmod 666 /dev/kvm
+          fi
+
+      - name: Install Android emulator image
+        shell: bash
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "emulator" \
+            "platforms;android-35" \
+            "system-images;android-35;google_apis;x86_64"
+          echo no | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" \
+            create avd \
+            --force \
+            --name connectx-ci \
+            --package "system-images;android-35;google_apis;x86_64"
+
+      - name: Start emulator and wait for Android
+        shell: bash
+        run: |
+          nohup "$ANDROID_SDK_ROOT/emulator/emulator" \
+            -avd connectx-ci \
+            -no-window \
+            -noaudio \
+            -no-boot-anim \
+            -no-snapshot \
+            -no-metrics \
+            -gpu swiftshader_indirect \
+            > emulator.log 2>&1 &
+
+          adb wait-for-device
+          timeout 300 bash -c '
+            until [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" == "1" ]]; do
+              sleep 5
+            done
+          '
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+          adb shell getprop ro.product.cpu.abi
+          adb shell getprop ro.build.version.sdk
+
+      - name: Run native bridge Android smoke test
+        run: gradle --no-daemon :vpn:nativebridge:connectedDebugAndroidTest
+
+      - name: Collect emulator diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p emulator-diagnostics
+          cp emulator.log emulator-diagnostics/ 2>/dev/null || true
+          adb logcat -d > emulator-diagnostics/logcat.txt 2>/dev/null || true
+          cp -R vpn/nativebridge/build/reports/androidTests emulator-diagnostics/reports 2>/dev/null || true
+          cp -R vpn/nativebridge/build/outputs/androidTest-results emulator-diagnostics/results 2>/dev/null || true
+
+      - name: Upload emulator diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: connectx-emulator-smoke-${{ github.sha }}
+          path: emulator-diagnostics
+          if-no-files-found: warn
+          retention-days: 14
