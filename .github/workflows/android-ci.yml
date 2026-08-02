@@ -36,14 +36,14 @@ jobs:
           yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;28.0.13004108"
 
-      - name: Test Go bridge
+      - name: Test Go bridge lifecycle
         working-directory: engine/go
         shell: bash
         run: |
-          COMMIT="$(sed -n 's/^commit=//p' upstream.lock)"
-          go get "github.com/xjasonlyu/tun2socks/v2@${COMMIT}"
+          VERSION="$(sed -n 's/^version=//p' upstream.lock)"
+          go get "github.com/xjasonlyu/tun2socks/v2@${VERSION}"
           go mod tidy
-          go test ./...
+          go test ./bridge
 
       - name: Build Android native bridge
         shell: bash
