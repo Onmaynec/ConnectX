@@ -12,8 +12,8 @@ android {
         applicationId = "dev.connectx"
         minSdk = 29
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.0-alpha.2"
+        versionCode = 4
+        versionName = "0.2.0-alpha.3"
     }
 
     buildTypes {
@@ -55,6 +55,7 @@ dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:designsystem"))
     implementation(project(":vpn:api"))
+    implementation(project(":vpn:nativebridge"))
     implementation(project(":vpn:service"))
 
     implementation(libs.androidx.core)
