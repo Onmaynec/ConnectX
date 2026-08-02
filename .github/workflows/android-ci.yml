@@ -100,6 +100,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    env:
+      ANDROID_AVD_HOME: ${{ runner.temp }}/connectx-avd
+      ANDROID_USER_HOME: ${{ runner.temp }}/connectx-android-user
 
     steps:
       - name: Checkout
@@ -133,6 +136,7 @@ jobs:
       - name: Install Android emulator image
         shell: bash
         run: |
+          mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_USER_HOME"
           yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" \
@@ -146,7 +150,10 @@ jobs:
             create avd \
             --force \
             --name connectx-ci \
+            --path "$ANDROID_AVD_HOME/connectx-ci.avd" \
             --package "system-images;android-35;google_apis;x86_64"
+          "$ANDROID_SDK_ROOT/emulator/emulator" -list-avds | tee avd-list.txt
+          grep -qx 'connectx-ci' avd-list.txt
 
       - name: Start emulator and wait for Android
         shell: bash
@@ -171,6 +178,7 @@ jobs:
           sleep 5
           if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
             cat accel-check.txt 2>/dev/null || true
+            cat avd-list.txt 2>/dev/null || true
             cat emulator.log
             exit 1
           fi
@@ -187,12 +195,14 @@ jobs:
             if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
               echo "Android emulator exited before boot completed" >&2
               cat accel-check.txt 2>/dev/null || true
+              cat avd-list.txt 2>/dev/null || true
               cat emulator.log
               exit 1
             fi
             if (( SECONDS >= DEADLINE )); then
               echo "Timed out waiting for Android boot" >&2
               cat accel-check.txt 2>/dev/null || true
+              cat avd-list.txt 2>/dev/null || true
               cat emulator.log
               exit 1
             fi
@@ -217,6 +227,7 @@ jobs:
           cp emulator.log emulator-diagnostics/ 2>/dev/null || true
           cp emulator.pid emulator-diagnostics/ 2>/dev/null || true
           cp accel-check.txt emulator-diagnostics/ 2>/dev/null || true
+          cp avd-list.txt emulator-diagnostics/ 2>/dev/null || true
           timeout 10 "$ADB" devices -l > emulator-diagnostics/devices.txt 2>&1 || true
           timeout 10 "$ADB" logcat -d > emulator-diagnostics/logcat.txt 2>&1 || true
           cp -R vpn/nativebridge/build/reports/androidTests emulator-diagnostics/reports 2>/dev/null || true
