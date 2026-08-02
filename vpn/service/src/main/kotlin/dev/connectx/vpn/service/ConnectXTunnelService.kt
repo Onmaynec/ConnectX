@@ -11,6 +11,8 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import dev.connectx.vpn.api.TunnelContract
+import dev.connectx.vpn.nativebridge.NativeTunBridge
+import dev.connectx.vpn.nativebridge.NativeTunSession
 import dev.connectx.vpn.relay.DirectTcpRelay
 import dev.connectx.vpn.relay.SocketProtector
 import dev.connectx.vpn.relay.Socks5Credentials
@@ -20,6 +22,9 @@ class ConnectXTunnelService : VpnService() {
     private var tunnelDescriptor: ParcelFileDescriptor? = null
     private var directTcpRelay: DirectTcpRelay? = null
     private var relayCredentials: Socks5Credentials? = null
+    private var nativeTunSession: NativeTunSession? = null
+    private var activeMode: String = TunnelContract.MODE_FOUNDATION
+    private var nativeVersion: String? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -29,7 +34,12 @@ class ConnectXTunnelService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             TunnelContract.ACTION_STOP -> stopTunnelAndService()
-            TunnelContract.ACTION_START, null -> startTunnel()
+            TunnelContract.ACTION_START, null -> startTunnel(
+                requestedMode = intent
+                    ?.getStringExtra(TunnelContract.EXTRA_ENGINE_MODE)
+                    .orEmpty()
+                    .ifBlank { TunnelContract.MODE_FOUNDATION },
+            )
         }
         return START_NOT_STICKY
     }
@@ -40,45 +50,79 @@ class ConnectXTunnelService : VpnService() {
     }
 
     override fun onDestroy() {
-        closeTunnelAndRelay()
+        closeTunnelResources()
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
 
-    private fun startTunnel() {
-        promoteToForeground()
+    private fun startTunnel(requestedMode: String) {
+        val mode = validateMode(requestedMode)
+        promoteToForeground(mode)
 
-        if (tunnelDescriptor != null && directTcpRelay != null) {
-            publishStatus(TunnelContract.STATUS_STARTED)
+        if (isModeAlreadyRunning(mode)) {
+            publishStartedStatus()
             return
         }
 
+        if (tunnelDescriptor != null || directTcpRelay != null || nativeTunSession != null) {
+            closeTunnelResources()
+        }
+
         try {
-            startDirectTcpRelay()
+            val relayPort = startDirectTcpRelay()
+            val tunnel = establishTestTunnel()
+            tunnelDescriptor = tunnel
 
-            tunnelDescriptor = Builder()
-                .setSession("ConnectX v0.2 alpha")
-                .setMtu(DEFAULT_MTU)
-                .addAddress(LOCAL_TUN_ADDRESS, LOCAL_TUN_PREFIX)
-                // v0.2.0-alpha.1 keeps TEST-NET-1 routing. The direct TCP relay is
-                // functional, but the source-built tun2socks bridge is the next gate
-                // before ordinary application traffic can safely enter the engine.
-                .addRoute(TEST_ROUTE, TEST_ROUTE_PREFIX)
-                .setBlocking(false)
-                .establish()
-                ?: error("Android не создал локальный TUN-интерфейс")
+            var startedNativeVersion: String? = null
+            if (mode == TunnelContract.MODE_NATIVE_SELF_TEST) {
+                startedNativeVersion = startNativeSelfTest(
+                    tunnel = tunnel,
+                    relayPort = relayPort,
+                )
+            }
 
-            publishStatus(TunnelContract.STATUS_STARTED)
-        } catch (error: Exception) {
-            closeTunnelAndRelay()
+            activeMode = mode
+            nativeVersion = startedNativeVersion
+            publishStartedStatus()
+            updateForegroundNotification()
+        } catch (error: Throwable) {
+            val cleanupError = closeTunnelResources()
             publishStatus(
                 status = TunnelContract.STATUS_ERROR,
-                error = error.message ?: "Не удалось запустить локальный сетевой движок",
+                mode = mode,
+                error = buildFailureMessage(error, cleanupError),
             )
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
     }
+
+    private fun validateMode(mode: String): String = when (mode) {
+        TunnelContract.MODE_FOUNDATION,
+        TunnelContract.MODE_NATIVE_SELF_TEST,
+        -> mode
+
+        else -> error("Неизвестный режим локального движка")
+    }
+
+    private fun isModeAlreadyRunning(mode: String): Boolean {
+        if (tunnelDescriptor == null || directTcpRelay == null || activeMode != mode) {
+            return false
+        }
+        return mode != TunnelContract.MODE_NATIVE_SELF_TEST ||
+            (nativeTunSession != null && runCatching { NativeTunBridge.isRunning() }.getOrDefault(false))
+    }
+
+    private fun establishTestTunnel(): ParcelFileDescriptor = Builder()
+        .setSession("ConnectX v0.2 alpha self-test")
+        .setMtu(DEFAULT_MTU)
+        .addAddress(LOCAL_TUN_ADDRESS, LOCAL_TUN_PREFIX)
+        // alpha.3 intentionally keeps only TEST-NET-1. Ordinary application
+        // traffic cannot enter the unfinished native stack.
+        .addRoute(TEST_ROUTE, TEST_ROUTE_PREFIX)
+        .setBlocking(false)
+        .establish()
+        ?: error("Android не создал локальный TUN-интерфейс")
 
     private fun startDirectTcpRelay(): Int {
         directTcpRelay?.let { relay ->
@@ -87,41 +131,120 @@ class ConnectXTunnelService : VpnService() {
 
         val credentials = Socks5Credentials.random()
         val relay = DirectTcpRelay(
-            socketProtector = SocketProtector { socket ->
-                protect(socket)
-            },
+            socketProtector = SocketProtector { socket -> protect(socket) },
             credentials = credentials,
         )
         val port = relay.start()
+        check(port in 1..65535) { "Локальный TCP relay не открыл порт" }
+
         relayCredentials = credentials
         directTcpRelay = relay
         return port
     }
 
+    private fun startNativeSelfTest(
+        tunnel: ParcelFileDescriptor,
+        relayPort: Int,
+    ): String {
+        check(NativeTunBridge.isAvailable()) {
+            NativeTunBridge.loadError()
+                ?: "Native bridge недоступен для ABI этого устройства"
+        }
+
+        val version = NativeTunBridge.version().getOrElse { error ->
+            throw IllegalStateException(
+                "Не удалось выполнить JNI version self-check",
+                error,
+            )
+        }
+        val credentials = checkNotNull(relayCredentials) {
+            "Отсутствуют временные credentials локального relay"
+        }
+
+        val session = NativeTunSession()
+        try {
+            session.start(
+                tunnel = tunnel,
+                mtu = DEFAULT_MTU,
+                relayHost = RELAY_HOST,
+                relayPort = relayPort,
+                relayUsername = credentials.username,
+                relayPassword = credentials.password,
+            )
+            check(NativeTunBridge.isRunning()) {
+                NativeTunBridge.lastError().ifBlank {
+                    "Native bridge не подтвердил состояние running"
+                }
+            }
+            nativeTunSession = session
+            return version
+        } catch (error: Throwable) {
+            runCatching { session.close() }
+            throw error
+        }
+    }
+
     private fun stopTunnelAndService() {
-        closeTunnelAndRelay()
-        publishStatus(TunnelContract.STATUS_STOPPED)
+        val stoppedMode = activeMode
+        val cleanupError = closeTunnelResources()
+        if (cleanupError == null) {
+            publishStatus(
+                status = TunnelContract.STATUS_STOPPED,
+                mode = stoppedMode,
+            )
+        } else {
+            publishStatus(
+                status = TunnelContract.STATUS_ERROR,
+                mode = stoppedMode,
+                error = "Ресурсы остановлены с ошибкой: ${cleanupError.message ?: cleanupError::class.java.simpleName}",
+            )
+        }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
-    private fun closeTunnelAndRelay() {
+    /** Closes native stack first, then the Android TUN and finally the relay. */
+    private fun closeTunnelResources(): Throwable? {
+        var firstError: Throwable? = null
+
+        val nativeSession = nativeTunSession
+        nativeTunSession = null
+        runCatching { nativeSession?.close() }
+            .onFailure { error -> firstError = error }
+
         val descriptor = tunnelDescriptor
         tunnelDescriptor = null
         try {
             descriptor?.close()
-        } catch (_: IOException) {
-            // The descriptor is already detached from the service state.
+        } catch (error: IOException) {
+            if (firstError == null) firstError = error
         }
 
         val relay = directTcpRelay
         directTcpRelay = null
         relayCredentials = null
-        relay?.close()
+        runCatching { relay?.close() }
+            .onFailure { error -> if (firstError == null) firstError = error }
+
+        nativeVersion = null
+        activeMode = TunnelContract.MODE_FOUNDATION
+        return firstError
     }
 
-    private fun promoteToForeground() {
-        val notification = buildNotification()
+    private fun buildFailureMessage(
+        primary: Throwable,
+        cleanup: Throwable?,
+    ): String {
+        val primaryMessage = primary.message ?: primary::class.java.simpleName
+        return if (cleanup == null) {
+            primaryMessage
+        } else {
+            "$primaryMessage; ошибка очистки: ${cleanup.message ?: cleanup::class.java.simpleName}"
+        }
+    }
+
+    private fun promoteToForeground(mode: String) {
+        val notification = buildNotification(mode)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 NOTIFICATION_ID,
@@ -133,7 +256,12 @@ class ConnectXTunnelService : VpnService() {
         }
     }
 
-    private fun buildNotification(): Notification {
+    private fun updateForegroundNotification() {
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIFICATION_ID, buildNotification(activeMode))
+    }
+
+    private fun buildNotification(mode: String): Notification {
         val stopIntent = Intent(this, ConnectXTunnelService::class.java).apply {
             action = TunnelContract.ACTION_STOP
         }
@@ -144,10 +272,16 @@ class ConnectXTunnelService : VpnService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
+        val detail = if (mode == TunnelContract.MODE_NATIVE_SELF_TEST) {
+            "Native bridge активен · только TEST-NET"
+        } else {
+            "Защищённый TCP relay готов · тестовый маршрут"
+        }
+
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
             .setContentTitle("ConnectX")
-            .setContentText("Защищённый TCP relay готов · тестовый маршрут")
+            .setContentText(detail)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
@@ -170,14 +304,32 @@ class ConnectXTunnelService : VpnService() {
             .createNotificationChannel(channel)
     }
 
-    private fun publishStatus(status: String, error: String? = null) {
+    private fun publishStartedStatus() {
+        publishStatus(
+            status = TunnelContract.STATUS_STARTED,
+            mode = activeMode,
+            nativeVersion = nativeVersion,
+        )
+    }
+
+    private fun publishStatus(
+        status: String,
+        mode: String,
+        error: String? = null,
+        nativeVersion: String? = null,
+    ) {
         val statusIntent = Intent(TunnelContract.ACTION_STATUS).apply {
             setPackage(packageName)
             putExtra(TunnelContract.EXTRA_STATUS, status)
+            putExtra(TunnelContract.EXTRA_ENGINE_MODE, mode)
+            putExtra(TunnelContract.EXTRA_NATIVE_ABI, currentAbi())
+            nativeVersion?.let { putExtra(TunnelContract.EXTRA_NATIVE_VERSION, it) }
             error?.let { putExtra(TunnelContract.EXTRA_ERROR, it) }
         }
         sendBroadcast(statusIntent)
     }
+
+    private fun currentAbi(): String = Build.SUPPORTED_ABIS.firstOrNull() ?: Build.CPU_ABI
 
     private companion object {
         const val NOTIFICATION_CHANNEL_ID = "connectx_tunnel"
@@ -189,5 +341,6 @@ class ConnectXTunnelService : VpnService() {
         const val LOCAL_TUN_PREFIX = 32
         const val TEST_ROUTE = "192.0.2.0"
         const val TEST_ROUTE_PREFIX = 24
+        const val RELAY_HOST = "127.0.0.1"
     }
 }

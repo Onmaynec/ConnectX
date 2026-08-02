@@ -4,13 +4,22 @@ import android.os.ParcelFileDescriptor
 import java.io.Closeable
 
 object NativeBridgeFeature {
-    /** Enabled only after ABI loading and physical-device lifecycle tests pass. */
+    /** Enabled only after real TUN lifecycle tests pass on physical devices. */
     const val ENABLED_BY_DEFAULT: Boolean = false
 }
+
+data class NativeBridgeSmokeReport(
+    val version: String,
+    val invalidStartCode: Int,
+    val invalidStartError: String,
+    val stopCode: Int,
+    val runningAfterStop: Boolean,
+)
 
 class NativeTunBridge private constructor() {
     companion object {
         const val CODE_OK = 0
+        const val CODE_INVALID_INPUT = 1
 
         private val loadFailure: Throwable? = runCatching {
             System.loadLibrary("connectxbridge")
@@ -23,6 +32,37 @@ class NativeTunBridge private constructor() {
         fun version(): Result<String> = runCatching {
             requireLoaded()
             nativeVersion()
+        }
+
+        /**
+         * Runs a side-effect-bounded JNI smoke test without creating a TUN.
+         *
+         * The invalid descriptor path must return a controlled error, and stop
+         * must remain idempotent. This is safe to run in Android instrumentation.
+         */
+        fun runtimeSmokeTest(): Result<NativeBridgeSmokeReport> = runCatching {
+            requireLoaded()
+            check(!nativeIsRunning()) { "Native bridge was already running before smoke test" }
+
+            val invalidStartCode = nativeStart(
+                tunFd = -1,
+                mtu = 1500,
+                host = "127.0.0.1",
+                port = 1,
+                username = "connectx-smoke",
+                password = "not-a-secret",
+            )
+            val invalidStartError = nativeLastError()
+            val stopCode = nativeStop()
+            val runningAfterStop = nativeIsRunning()
+
+            NativeBridgeSmokeReport(
+                version = nativeVersion(),
+                invalidStartCode = invalidStartCode,
+                invalidStartError = invalidStartError,
+                stopCode = stopCode,
+                runningAfterStop = runningAfterStop,
+            )
         }
 
         internal fun requireAvailable() {

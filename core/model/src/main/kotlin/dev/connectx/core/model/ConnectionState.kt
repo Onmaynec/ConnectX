@@ -9,19 +9,51 @@ enum class ConnectionState {
     ERROR,
 }
 
+enum class EngineMode {
+    FOUNDATION,
+    NATIVE_SELF_TEST,
+}
+
+data class NativeBridgeDiagnostics(
+    val available: Boolean? = null,
+    val version: String? = null,
+    val abi: String? = null,
+    val running: Boolean = false,
+    val lastResult: String? = null,
+)
+
 data class ConnectionUiState(
     val state: ConnectionState = ConnectionState.OFF,
+    val mode: EngineMode = EngineMode.FOUNDATION,
+    val diagnostics: NativeBridgeDiagnostics = NativeBridgeDiagnostics(),
     val errorMessage: String? = null,
 )
 
 sealed interface ConnectionEvent {
-    data object StartRequested : ConnectionEvent
+    data class StartRequested(
+        val mode: EngineMode = EngineMode.FOUNDATION,
+    ) : ConnectionEvent
+
     data object PermissionRequired : ConnectionEvent
     data object PermissionGranted : ConnectionEvent
     data object PermissionDenied : ConnectionEvent
-    data object TunnelStarted : ConnectionEvent
+
+    data class TunnelStarted(
+        val mode: EngineMode,
+        val nativeVersion: String? = null,
+        val abi: String? = null,
+    ) : ConnectionEvent
+
     data object StopRequested : ConnectionEvent
     data object TunnelStopped : ConnectionEvent
+
+    data class NativeAvailabilityChecked(
+        val available: Boolean,
+        val version: String? = null,
+        val abi: String? = null,
+        val error: String? = null,
+    ) : ConnectionEvent
+
     data class Failed(val message: String) : ConnectionEvent
 }
 
@@ -30,8 +62,9 @@ object ConnectionStateReducer {
         current: ConnectionUiState,
         event: ConnectionEvent,
     ): ConnectionUiState = when (event) {
-        ConnectionEvent.StartRequested -> current.copy(
+        is ConnectionEvent.StartRequested -> current.copy(
             state = ConnectionState.STARTING,
+            mode = event.mode,
             errorMessage = null,
         )
 
@@ -45,13 +78,27 @@ object ConnectionStateReducer {
             errorMessage = null,
         )
 
-        ConnectionEvent.PermissionDenied -> ConnectionUiState(
+        ConnectionEvent.PermissionDenied -> current.copy(
             state = ConnectionState.OFF,
+            mode = EngineMode.FOUNDATION,
             errorMessage = "Системное разрешение не предоставлено",
         )
 
-        ConnectionEvent.TunnelStarted -> ConnectionUiState(
+        is ConnectionEvent.TunnelStarted -> current.copy(
             state = ConnectionState.LOCAL_TUN_ACTIVE,
+            mode = event.mode,
+            diagnostics = current.diagnostics.copy(
+                available = if (event.mode == EngineMode.NATIVE_SELF_TEST) true else current.diagnostics.available,
+                version = event.nativeVersion ?: current.diagnostics.version,
+                abi = event.abi ?: current.diagnostics.abi,
+                running = event.mode == EngineMode.NATIVE_SELF_TEST,
+                lastResult = if (event.mode == EngineMode.NATIVE_SELF_TEST) {
+                    "Native self-test запущен на TEST-NET"
+                } else {
+                    current.diagnostics.lastResult
+                },
+            ),
+            errorMessage = null,
         )
 
         ConnectionEvent.StopRequested -> current.copy(
@@ -59,12 +106,40 @@ object ConnectionStateReducer {
             errorMessage = null,
         )
 
-        ConnectionEvent.TunnelStopped -> ConnectionUiState(
+        ConnectionEvent.TunnelStopped -> current.copy(
             state = ConnectionState.OFF,
+            mode = EngineMode.FOUNDATION,
+            diagnostics = current.diagnostics.copy(
+                running = false,
+                lastResult = if (current.mode == EngineMode.NATIVE_SELF_TEST) {
+                    "Native self-test остановлен без перехвата обычного трафика"
+                } else {
+                    current.diagnostics.lastResult
+                },
+            ),
+            errorMessage = null,
         )
 
-        is ConnectionEvent.Failed -> ConnectionUiState(
+        is ConnectionEvent.NativeAvailabilityChecked -> current.copy(
+            diagnostics = current.diagnostics.copy(
+                available = event.available,
+                version = event.version,
+                abi = event.abi,
+                running = false,
+                lastResult = event.error ?: current.diagnostics.lastResult,
+            ),
+        )
+
+        is ConnectionEvent.Failed -> current.copy(
             state = ConnectionState.ERROR,
+            diagnostics = current.diagnostics.copy(
+                running = false,
+                lastResult = if (current.mode == EngineMode.NATIVE_SELF_TEST) {
+                    event.message
+                } else {
+                    current.diagnostics.lastResult
+                },
+            ),
             errorMessage = event.message,
         )
     }
