@@ -13,11 +13,13 @@ import androidx.core.app.NotificationCompat
 import dev.connectx.vpn.api.TunnelContract
 import dev.connectx.vpn.relay.DirectTcpRelay
 import dev.connectx.vpn.relay.SocketProtector
+import dev.connectx.vpn.relay.Socks5Credentials
 import java.io.IOException
 
 class ConnectXTunnelService : VpnService() {
     private var tunnelDescriptor: ParcelFileDescriptor? = null
     private var directTcpRelay: DirectTcpRelay? = null
+    private var relayCredentials: Socks5Credentials? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -83,12 +85,15 @@ class ConnectXTunnelService : VpnService() {
             return relay.stats().listeningPort
         }
 
+        val credentials = Socks5Credentials.random()
         val relay = DirectTcpRelay(
             socketProtector = SocketProtector { socket ->
                 protect(socket)
             },
+            credentials = credentials,
         )
         val port = relay.start()
+        relayCredentials = credentials
         directTcpRelay = relay
         return port
     }
@@ -111,6 +116,7 @@ class ConnectXTunnelService : VpnService() {
 
         val relay = directTcpRelay
         directTcpRelay = null
+        relayCredentials = null
         relay?.close()
     }
 
@@ -141,7 +147,7 @@ class ConnectXTunnelService : VpnService() {
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
             .setContentTitle("ConnectX")
-            .setContentText("TCP relay готов · безопасный тестовый маршрут")
+            .setContentText("Защищённый TCP relay готов · тестовый маршрут")
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
