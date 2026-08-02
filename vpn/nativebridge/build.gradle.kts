@@ -9,6 +9,7 @@ android {
 
     defaultConfig {
         minSdk = 29
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     sourceSets {
@@ -25,4 +26,9 @@ android {
 
 kotlin {
     jvmToolchain(17)
+}
+
+dependencies {
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }
