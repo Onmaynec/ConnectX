@@ -60,10 +60,10 @@ jobs:
         shell: bash
         run: |
           cd engine/go
-          go mod tidy
-          git diff --exit-code -- go.mod
+          go mod download
           go mod verify
           go test ./bridge
+          git diff --exit-code -- go.mod
           cd ../..
           chmod +x engine/go/build-android.sh
           engine/go/build-android.sh "$ANDROID_SDK_ROOT/ndk/28.0.13004108"
@@ -92,11 +92,13 @@ jobs:
           (cd engine/go/build/android && zip -r "$GITHUB_WORKSPACE/$NATIVE_ARCHIVE" .)
           cp THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES-v0.2.0-alpha.2.md
           cp licenses/tun2socks-MIT.txt tun2socks-MIT.txt
+          cp licenses/gvisor-LICENSE.txt gvisor-LICENSE.txt
           sha256sum \
             "$APK_NAME" \
             "$NATIVE_ARCHIVE" \
             THIRD_PARTY_NOTICES-v0.2.0-alpha.2.md \
             tun2socks-MIT.txt \
+            gvisor-LICENSE.txt \
             > CHECKSUMS.txt
 
       - name: Publish GitHub prerelease
@@ -116,6 +118,7 @@ jobs:
             CHECKSUMS.txt \
             THIRD_PARTY_NOTICES-v0.2.0-alpha.2.md \
             tun2socks-MIT.txt \
+            gvisor-LICENSE.txt \
             --target "$TARGET_SHA" \
             --title "ConnectX v0.2.0-alpha.2 — Native Bridge Preview" \
             --notes-file docs/releases/v0.2.0-alpha.2.md \
