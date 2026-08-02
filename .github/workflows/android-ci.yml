@@ -12,7 +12,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -23,6 +23,38 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+
+      - name: Set up Go 1.26.3
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.3"
+          cache-dependency-path: |
+            engine/go/go.mod
+            engine/go/go.sum
+
+      - name: Install locked Android NDK
+        shell: bash
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;28.0.13004108"
+
+      - name: Test committed Go dependency lock
+        working-directory: engine/go
+        shell: bash
+        run: |
+          go mod download
+          go mod verify
+          go test -mod=readonly ./bridge
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Build Android native bridge
+        shell: bash
+        run: |
+          chmod +x engine/go/build-android.sh
+          engine/go/build-android.sh "$ANDROID_SDK_ROOT/ndk/28.0.13004108"
+          test -s engine/go/build/android/jniLibs/arm64-v8a/libconnectxbridge.so
+          test -s engine/go/build/android/jniLibs/x86_64/libconnectxbridge.so
+          file engine/go/build/android/jniLibs/*/libconnectxbridge.so
 
       - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
@@ -38,10 +70,28 @@ jobs:
       - name: Assemble debug APK
         run: gradle --no-daemon :app:assembleDebug
 
+      - name: Verify native and legal APK payloads
+        shell: bash
+        run: |
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | tee apk-contents.txt
+          grep -q 'lib/arm64-v8a/libconnectxbridge.so' apk-contents.txt
+          grep -q 'lib/x86_64/libconnectxbridge.so' apk-contents.txt
+          grep -q 'assets/THIRD_PARTY_NOTICES.md' apk-contents.txt
+          grep -q 'assets/tun2socks-MIT.txt' apk-contents.txt
+          grep -q 'assets/gvisor-LICENSE.txt' apk-contents.txt
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: connectx-debug-${{ github.sha }}
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload native bridge
+        uses: actions/upload-artifact@v4
+        with:
+          name: connectx-native-${{ github.sha }}
+          path: engine/go/build/android
           if-no-files-found: error
           retention-days: 14

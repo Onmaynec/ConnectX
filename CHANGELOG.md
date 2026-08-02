@@ -6,9 +6,30 @@ All notable changes to ConnectX are documented in this file.
 
 ### Planned
 
-- Source-built tun2socks/gVisor bridge from the Android TUN descriptor to the local relay.
+- Physical-device JNI and TUN fd lifecycle verification.
+- Controlled TEST-NET traffic through the native stack.
 - Direct UDP and DNS passthrough.
 - First verified DPI-obfuscation strategy.
+
+## [0.2.0-alpha.2]
+
+### Added
+
+- Source-built Go/JNI bridge using tun2socks v2.7.0 and gVisor.
+- Locked upstream commit, Go version, Android API and NDK version.
+- Android shared libraries for `arm64-v8a` and `x86_64`.
+- Native start/stop/status/error API without CLI `log.Fatal` behavior.
+- Explicit ownership transfer of a duplicated Android TUN descriptor.
+- Idempotent native shutdown and fd-closure tests.
+- APK verification that both native ABIs are packaged.
+- Third-party notices and upstream MIT license.
+
+### Safety boundaries
+
+- The native bridge is packaged but disabled by default.
+- Ordinary application traffic is not routed into gVisor yet.
+- TUN capture remains limited to TEST-NET-1 (`192.0.2.0/24`).
+- Default route, UDP, DNS passthrough, IPv6, QUIC and DPI obfuscation are not enabled.
 
 ## [0.2.0-alpha.1]
 

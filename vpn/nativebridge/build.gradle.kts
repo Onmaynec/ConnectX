@@ -4,11 +4,17 @@ plugins {
 }
 
 android {
-    namespace = "dev.connectx.vpn.service"
+    namespace = "dev.connectx.vpn.nativebridge"
     compileSdk = 36
 
     defaultConfig {
         minSdk = 29
+    }
+
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDir(rootProject.file("engine/go/build/android/jniLibs"))
+        }
     }
 
     compileOptions {
@@ -19,11 +25,4 @@ android {
 
 kotlin {
     jvmToolchain(17)
-}
-
-dependencies {
-    implementation(project(":vpn:api"))
-    implementation(project(":vpn:nativebridge"))
-    implementation(project(":vpn:relay"))
-    implementation(libs.androidx.core)
 }
