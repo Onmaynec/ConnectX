@@ -74,15 +74,16 @@ if [[ "$TAG_COMMIT" != "$UPSTREAM_COMMIT" ]]; then
   exit 1
 fi
 
-# Download only the versions committed in go.mod, verify module checksums, and
-# refuse any accidental version drift before compiling native code.
+# Download and verify only dependencies already committed in go.mod/go.sum.
 go mod download
 go mod verify
-RESOLVED_VERSION="$(go list -m -f '{{.Version}}' github.com/xjasonlyu/tun2socks/v2)"
+RESOLVED_VERSION="$(go list -mod=readonly -m -f '{{.Version}}' github.com/xjasonlyu/tun2socks/v2)"
 if [[ "$RESOLVED_VERSION" != "$UPSTREAM_VERSION" ]]; then
   echo "Resolved unexpected tun2socks version: $RESOLVED_VERSION" >&2
   exit 1
 fi
+
+git diff --exit-code -- go.mod go.sum
 
 rm -rf "$OUTPUT_ROOT"
 mkdir -p "$OUTPUT_ROOT/jniLibs" "$OUTPUT_ROOT/include" "$OUTPUT_ROOT/metadata"
@@ -100,6 +101,7 @@ build_abi() {
   GOARCH="$goarch" \
   CC="$TOOLCHAIN/${compiler_prefix}${ANDROID_API}-clang" \
   go build \
+    -mod=readonly \
     -trimpath \
     -buildmode=c-shared \
     -ldflags="-s -w -X github.com/Onmaynec/ConnectX/engine/go/bridge.upstreamCommit=${UPSTREAM_COMMIT}" \
@@ -122,9 +124,7 @@ fi
 find "$OUTPUT_ROOT/jniLibs" -name '*.h' -delete
 
 cp go.mod "$OUTPUT_ROOT/metadata/go.mod"
-if [[ -f go.sum ]]; then
-  cp go.sum "$OUTPUT_ROOT/metadata/go.sum"
-fi
+cp go.sum "$OUTPUT_ROOT/metadata/go.sum"
 
 cat > "$OUTPUT_ROOT/metadata/build.txt" <<META
 upstream_repository=$UPSTREAM_REPOSITORY
