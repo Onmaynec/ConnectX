@@ -43,22 +43,25 @@ class MainActivity : ComponentActivity() {
 
     private val tunnelStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            val mode = intent?.readEngineMode() ?: EngineMode.FOUNDATION
-            when (intent?.getStringExtra(TunnelContract.EXTRA_STATUS)) {
+            val statusIntent = intent ?: return
+            val mode = statusIntent.readEngineMode()
+            when (statusIntent.getStringExtra(TunnelContract.EXTRA_STATUS)) {
                 TunnelContract.STATUS_STARTED -> dispatch(
                     ConnectionEvent.TunnelStarted(
                         mode = mode,
-                        nativeVersion = intent.getStringExtra(
+                        nativeVersion = statusIntent.getStringExtra(
                             TunnelContract.EXTRA_NATIVE_VERSION,
                         ),
-                        abi = intent.getStringExtra(TunnelContract.EXTRA_NATIVE_ABI),
+                        abi = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_NATIVE_ABI,
+                        ),
                     ),
                 )
 
                 TunnelContract.STATUS_STOPPED -> dispatch(ConnectionEvent.TunnelStopped)
                 TunnelContract.STATUS_ERROR -> dispatch(
                     ConnectionEvent.Failed(
-                        intent.getStringExtra(TunnelContract.EXTRA_ERROR)
+                        statusIntent.getStringExtra(TunnelContract.EXTRA_ERROR)
                             ?: "Неизвестная ошибка локального TUN",
                     ),
                 )
