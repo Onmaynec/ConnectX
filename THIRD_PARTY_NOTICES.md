@@ -15,11 +15,14 @@ The upstream MIT license text is included in `licenses/tun2socks-MIT.txt`.
 ## gVisor
 
 - Project: `google/gvisor`
-- Version: the exact module version selected by tun2socks v2.7.0 and recorded in the generated Go dependency lock/checksums
-- License: Apache License 2.0, with additional per-file notices where applicable
+- Module version: `v0.0.0-20260701204157-69c2d17aea96`
+- Commit: `69c2d17aea96`
+- License: Apache License 2.0, with additional MIT/BSD notices for designated files
 
-The complete upstream license text is distributed with source and release notices. ConnectX does not claim ownership of tun2socks, gVisor, Go, Android NDK, or their dependencies.
+The upstream combined license text is included in `licenses/gvisor-LICENSE.txt` and is attached to the alpha.2 release.
+
+ConnectX does not claim ownership of tun2socks, gVisor, Go, Android NDK, or their dependencies.
 
 ## Build policy
 
-ConnectX does not download or commit an opaque prebuilt tun2socks binary. CI resolves the locked source release, verifies Go module checksums, and builds Android shared libraries for the declared ABIs using the locked Go and Android NDK versions.
+ConnectX does not download or commit an opaque prebuilt tun2socks binary. CI verifies the locked tun2socks tag against its audited commit, downloads only the module versions pinned in `go.mod`, verifies Go module checksums, checks the exact Go and Android NDK toolchains, and builds Android shared libraries for the declared ABIs.
