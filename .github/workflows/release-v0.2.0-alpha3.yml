@@ -123,6 +123,9 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    env:
+      ANDROID_AVD_HOME: ${{ runner.temp }}/connectx-release-avd
+      ANDROID_USER_HOME: ${{ runner.temp }}/connectx-release-android-user
 
     steps:
       - name: Checkout release commit
@@ -147,16 +150,18 @@ jobs:
           name: alpha3-native-${{ needs.verify.outputs.target_sha }}
           path: engine/go/build/android
 
-      - name: Enable KVM access
+      - name: Verify KVM acceleration
         shell: bash
         run: |
-          if [[ -e /dev/kvm ]]; then
-            sudo chmod 666 /dev/kvm
-          fi
+          test -e /dev/kvm
+          sudo chmod 666 /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
 
       - name: Install Android emulator image
         shell: bash
         run: |
+          mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_USER_HOME"
           yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" \
@@ -165,11 +170,15 @@ jobs:
             "system-images;android-35;google_apis;x86_64"
           test -x "$ANDROID_SDK_ROOT/platform-tools/adb"
           test -x "$ANDROID_SDK_ROOT/emulator/emulator"
+          "$ANDROID_SDK_ROOT/emulator/emulator" -accel-check | tee accel-check.txt
           echo no | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" \
             create avd \
             --force \
             --name connectx-release-ci \
+            --path "$ANDROID_AVD_HOME/connectx-release-ci.avd" \
             --package "system-images;android-35;google_apis;x86_64"
+          "$ANDROID_SDK_ROOT/emulator/emulator" -list-avds | tee avd-list.txt
+          grep -qx 'connectx-release-ci' avd-list.txt
 
       - name: Start emulator and wait for Android
         shell: bash
@@ -179,10 +188,12 @@ jobs:
 
           nohup "$EMULATOR" \
             -avd connectx-release-ci \
+            -accel on \
             -no-window \
             -noaudio \
             -no-boot-anim \
             -no-snapshot \
+            -no-snapshot-save \
             -no-metrics \
             -gpu swiftshader_indirect \
             > emulator.log 2>&1 &
@@ -191,6 +202,8 @@ jobs:
 
           sleep 5
           if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
+            cat accel-check.txt 2>/dev/null || true
+            cat avd-list.txt 2>/dev/null || true
             cat emulator.log
             exit 1
           fi
@@ -206,11 +219,15 @@ jobs:
             fi
             if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
               echo "Android emulator exited before boot completed" >&2
+              cat accel-check.txt 2>/dev/null || true
+              cat avd-list.txt 2>/dev/null || true
               cat emulator.log
               exit 1
             fi
             if (( SECONDS >= DEADLINE )); then
               echo "Timed out waiting for Android boot" >&2
+              cat accel-check.txt 2>/dev/null || true
+              cat avd-list.txt 2>/dev/null || true
               cat emulator.log
               exit 1
             fi
@@ -231,8 +248,10 @@ jobs:
           mkdir -p emulator-diagnostics
           cp emulator.log emulator-diagnostics/ 2>/dev/null || true
           cp emulator.pid emulator-diagnostics/ 2>/dev/null || true
-          "$ADB" devices -l > emulator-diagnostics/devices.txt 2>/dev/null || true
-          "$ADB" logcat -d > emulator-diagnostics/logcat.txt 2>/dev/null || true
+          cp accel-check.txt emulator-diagnostics/ 2>/dev/null || true
+          cp avd-list.txt emulator-diagnostics/ 2>/dev/null || true
+          timeout 10 "$ADB" devices -l > emulator-diagnostics/devices.txt 2>&1 || true
+          timeout 10 "$ADB" logcat -d > emulator-diagnostics/logcat.txt 2>&1 || true
           cp -R vpn/nativebridge/build/reports/androidTests \
             emulator-diagnostics/reports 2>/dev/null || true
           cp -R vpn/nativebridge/build/outputs/androidTest-results \
