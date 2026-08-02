@@ -6,10 +6,33 @@ All notable changes to ConnectX are documented in this file.
 
 ### Planned
 
-- Direct TCP/UDP passthrough through a local userspace network engine.
+- Source-built tun2socks/gVisor bridge from the Android TUN fd.
+- Direct UDP relay and DNS passthrough.
 - First verified DPI-obfuscation strategy.
 
-## [0.1.0] - pending verification
+## [0.2.0-alpha.1]
+
+### Added
+
+- Pure Kotlin local SOCKS5 `CONNECT` relay.
+- Direct outbound TCP sockets protected through `VpnService.protect()`.
+- Bounded concurrent connection count.
+- Bidirectional byte forwarding and aggregate relay statistics.
+- SOCKS5 parser unit tests.
+- End-to-end relay test using a local echo server.
+- Architecture decision record for the userspace engine.
+- App version metadata and UI text for the engine alpha.
+
+### Safety boundaries
+
+- The Android TUN still captures only TEST-NET-1 (`192.0.2.0/24`).
+- Ordinary application traffic is not connected to the relay yet.
+- The source-built tun2socks/gVisor bridge is still required before enabling the default route.
+- UDP, DNS passthrough, IPv6 and DPI obfuscation are not implemented in this alpha.
+- The local SOCKS endpoint listens only on the device loopback interface.
+- No remote ConnectX proxy or VPN server is used.
+
+## [0.1.0]
 
 ### Added
 
@@ -29,7 +52,3 @@ All notable changes to ConnectX are documented in this file.
 - No traffic is sent to ConnectX servers.
 - DPI obfuscation is not implemented in this version.
 - HTTPS interception, custom certificate installation and MITM are not used.
-
-### Release gate
-
-The `v0.1.0` tag and GitHub Release must not be created until CI succeeds on the exact release commit and the APK is installed on at least one Android 10+ device.
