@@ -25,6 +25,10 @@ class NativeTunBridge private constructor() {
             nativeVersion()
         }
 
+        internal fun requireAvailable() {
+            requireLoaded()
+        }
+
         internal fun start(
             ownedTunFd: Int,
             mtu: Int,
@@ -93,7 +97,9 @@ class NativeTunBridge private constructor() {
  * Owns one native bridge run.
  *
  * A duplicate of the Android TUN descriptor is detached and transferred to
- * Go. Native code closes that descriptor on every success or failure path.
+ * Go. Native code closes that descriptor on every normal success or failure
+ * return. Kotlin reclaims it only when the JNI call itself fails before the
+ * native ownership contract can complete.
  */
 class NativeTunSession : Closeable {
     private var started = false
@@ -108,17 +114,24 @@ class NativeTunSession : Closeable {
         relayPassword: String,
     ) {
         check(!started) { "Native TUN session is already started" }
+        NativeTunBridge.requireAvailable()
 
         val duplicate = ParcelFileDescriptor.dup(tunnel.fileDescriptor)
         val ownedFd = duplicate.detachFd()
-        val result = NativeTunBridge.start(
-            ownedTunFd = ownedFd,
-            mtu = mtu,
-            host = relayHost,
-            port = relayPort,
-            username = relayUsername,
-            password = relayPassword,
-        )
+        val result = try {
+            NativeTunBridge.start(
+                ownedTunFd = ownedFd,
+                mtu = mtu,
+                host = relayHost,
+                port = relayPort,
+                username = relayUsername,
+                password = relayPassword,
+            )
+        } catch (error: Throwable) {
+            closeDetachedFd(ownedFd)
+            throw error
+        }
+
         check(result == NativeTunBridge.CODE_OK) {
             NativeTunBridge.lastError().ifBlank {
                 "Native bridge failed with code $result"
@@ -136,6 +149,12 @@ class NativeTunSession : Closeable {
             NativeTunBridge.lastError().ifBlank {
                 "Native bridge stop failed with code $result"
             }
+        }
+    }
+
+    private fun closeDetachedFd(fd: Int) {
+        runCatching {
+            ParcelFileDescriptor.adoptFd(fd).close()
         }
     }
 }
