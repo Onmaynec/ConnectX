@@ -40,10 +40,10 @@ jobs:
         working-directory: engine/go
         shell: bash
         run: |
-          go mod download
+          go mod tidy
+          git diff --exit-code -- go.mod
           go mod verify
           go test ./bridge
-          git diff --exit-code -- go.mod
 
       - name: Build Android native bridge
         shell: bash
