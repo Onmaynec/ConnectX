@@ -152,6 +152,14 @@ jobs:
             --name connectx-ci \
             --path "$ANDROID_AVD_HOME/connectx-ci.avd" \
             --package "system-images;android-35;google_apis;x86_64"
+
+          AVD_CONFIG="$ANDROID_AVD_HOME/connectx-ci.avd/config.ini"
+          test -f "$AVD_CONFIG"
+          sed -i '/^disk.dataPartition.size=/d' "$AVD_CONFIG"
+          sed -i '/^hw.ramSize=/d' "$AVD_CONFIG"
+          printf '\ndisk.dataPartition.size=2048M\nhw.ramSize=2048\n' >> "$AVD_CONFIG"
+          grep -E '^(disk.dataPartition.size|hw.ramSize)=' "$AVD_CONFIG" | tee avd-storage.txt
+
           "$ANDROID_SDK_ROOT/emulator/emulator" -list-avds | tee avd-list.txt
           grep -qx 'connectx-ci' avd-list.txt
 
@@ -164,6 +172,7 @@ jobs:
           nohup "$EMULATOR" \
             -avd connectx-ci \
             -accel on \
+            -memory 2048 \
             -no-window \
             -noaudio \
             -no-boot-anim \
@@ -179,6 +188,7 @@ jobs:
           if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
             cat accel-check.txt 2>/dev/null || true
             cat avd-list.txt 2>/dev/null || true
+            cat avd-storage.txt 2>/dev/null || true
             cat emulator.log
             exit 1
           fi
@@ -196,6 +206,7 @@ jobs:
               echo "Android emulator exited before boot completed" >&2
               cat accel-check.txt 2>/dev/null || true
               cat avd-list.txt 2>/dev/null || true
+              cat avd-storage.txt 2>/dev/null || true
               cat emulator.log
               exit 1
             fi
@@ -203,6 +214,7 @@ jobs:
               echo "Timed out waiting for Android boot" >&2
               cat accel-check.txt 2>/dev/null || true
               cat avd-list.txt 2>/dev/null || true
+              cat avd-storage.txt 2>/dev/null || true
               cat emulator.log
               exit 1
             fi
@@ -228,6 +240,7 @@ jobs:
           cp emulator.pid emulator-diagnostics/ 2>/dev/null || true
           cp accel-check.txt emulator-diagnostics/ 2>/dev/null || true
           cp avd-list.txt emulator-diagnostics/ 2>/dev/null || true
+          cp avd-storage.txt emulator-diagnostics/ 2>/dev/null || true
           timeout 10 "$ADB" devices -l > emulator-diagnostics/devices.txt 2>&1 || true
           timeout 10 "$ADB" logcat -d > emulator-diagnostics/logcat.txt 2>&1 || true
           cp -R vpn/nativebridge/build/reports/androidTests emulator-diagnostics/reports 2>/dev/null || true
