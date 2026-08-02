@@ -115,13 +115,13 @@ fun HomeScreen(
                 Box(modifier = Modifier.padding(20.dp)) {
                     Column {
                         Text(
-                            text = "Engine alpha · v0.2.0-a1",
+                            text = "Native bridge · v0.2.0-a2",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "Добавлен локальный TCP relay с защищёнными исходящими сокетами. Сейчас активен только безопасный тестовый маршрут; обычный трафик будет подключён после сборки и проверки tun2socks-моста.",
+                            text = "В APK добавлен собранный из исходников TUN→gVisor bridge для arm64 и x86_64. Он пока выключен: обычный трафик не перехватывается до проверки запуска, остановки и владения fd на реальном устройстве.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
