@@ -6,6 +6,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import org.junit.Assert.assertArrayEquals
@@ -89,7 +90,7 @@ class DirectTcpRelayTest {
             }
 
             echoThread.join(2_000)
-            val stats = relay.stats()
+            val stats = awaitTransferredBytes(relay)
             assertTrue(protectCalled.get())
             assertEquals(1L, stats.acceptedConnections)
             assertTrue(stats.uploadedBytes > 0)
@@ -184,6 +185,19 @@ class DirectTcpRelayTest {
         } finally {
             relay.close()
         }
+    }
+
+    private fun awaitTransferredBytes(relay: DirectTcpRelay): RelayStats {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        var stats = relay.stats()
+        while (
+            (stats.uploadedBytes == 0L || stats.downloadedBytes == 0L) &&
+            System.nanoTime() < deadline
+        ) {
+            Thread.sleep(10)
+            stats = relay.stats()
+        }
+        return stats
     }
 
     private fun authenticate(
