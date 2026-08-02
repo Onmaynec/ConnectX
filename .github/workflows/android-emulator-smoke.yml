@@ -10,9 +10,59 @@ permissions:
   contents: read
 
 jobs:
-  native-runtime-smoke:
+  native-payload:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go 1.26.3
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.3"
+          cache-dependency-path: |
+            engine/go/go.mod
+            engine/go/go.sum
+
+      - name: Install locked Android NDK
+        shell: bash
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;28.0.13004108"
+
+      - name: Verify locked Go dependencies
+        working-directory: engine/go
+        shell: bash
+        run: |
+          go mod download
+          go mod verify
+          go test -mod=readonly ./bridge
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Build Android native bridge
+        shell: bash
+        run: |
+          chmod +x engine/go/build-android.sh
+          engine/go/build-android.sh "$ANDROID_SDK_ROOT/ndk/28.0.13004108"
+          test -s engine/go/build/android/jniLibs/x86_64/libconnectxbridge.so
+
+      - name: Upload verified native payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-native-${{ github.sha }}
+          path: engine/go/build/android
+          if-no-files-found: error
+          retention-days: 2
+
+  native-runtime-smoke:
+    needs: native-payload
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      ANDROID_AVD_HOME: ${{ runner.temp }}/connectx-avd
+      ANDROID_USER_HOME: ${{ runner.temp }}/connectx-android-user
 
     steps:
       - name: Checkout
@@ -24,58 +74,37 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Go 1.26.3
-        uses: actions/setup-go@v6
-        with:
-          go-version: "1.26.3"
-          cache-dependency-path: |
-            engine/go/go.mod
-            engine/go/go.sum
-
-      - name: Configure Android runtime paths
-        shell: bash
-        run: |
-          echo "ANDROID_AVD_HOME=$RUNNER_TEMP/connectx-avd" >> "$GITHUB_ENV"
-          echo "ANDROID_USER_HOME=$RUNNER_TEMP/connectx-android-user" >> "$GITHUB_ENV"
-
-      - name: Install native and emulator toolchains
-        shell: bash
-        run: |
-          mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_USER_HOME"
-          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
-          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
-            "ndk;28.0.13004108" \
-            "platform-tools" \
-            "emulator" \
-            "platforms;android-35" \
-            "system-images;android-35;google_apis;x86_64"
-
-      - name: Verify locked Go dependencies
-        working-directory: engine/go
-        shell: bash
-        run: |
-          go mod download
-          go mod verify
-          go test -mod=readonly ./bridge
-          git diff --exit-code -- go.mod go.sum
-
-      - name: Build x86_64 Android native bridge
-        shell: bash
-        run: |
-          chmod +x engine/go/build-android.sh
-          engine/go/build-android.sh "$ANDROID_SDK_ROOT/ndk/28.0.13004108"
-          test -s engine/go/build/android/jniLibs/x86_64/libconnectxbridge.so
-
       - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.13"
 
-      - name: Create deterministic AVD
+      - name: Download verified native payload
+        uses: actions/download-artifact@v4
+        with:
+          name: emulator-native-${{ github.sha }}
+          path: engine/go/build/android
+
+      - name: Verify KVM acceleration
         shell: bash
         run: |
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
+
+      - name: Install Android emulator image
+        shell: bash
+        run: |
+          mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_USER_HOME"
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "emulator" \
+            "platforms;android-35" \
+            "system-images;android-35;google_apis;x86_64"
+          test -x "$ANDROID_SDK_ROOT/platform-tools/adb"
+          test -x "$ANDROID_SDK_ROOT/emulator/emulator"
           "$ANDROID_SDK_ROOT/emulator/emulator" -accel-check | tee accel-check.txt
           echo no | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" \
             create avd \
@@ -84,15 +113,9 @@ jobs:
             --path "$ANDROID_AVD_HOME/connectx-ci.avd" \
             --package "system-images;android-35;google_apis;x86_64"
 
-          AVD_CONFIG="$ANDROID_AVD_HOME/connectx-ci.avd/config.ini"
-          test -f "$AVD_CONFIG"
-          sed -i '/^disk.dataPartition.size=/d' "$AVD_CONFIG"
-          sed -i '/^hw.ramSize=/d' "$AVD_CONFIG"
-          printf '\ndisk.dataPartition.size=2048M\nhw.ramSize=2048\n' >> "$AVD_CONFIG"
-          grep -E '^(disk.dataPartition.size|hw.ramSize)=' "$AVD_CONFIG" | tee avd-storage.txt
-
           "$ANDROID_SDK_ROOT/emulator/emulator" -list-avds | tee avd-list.txt
           grep -qx 'connectx-ci' avd-list.txt
+          df -h "$ANDROID_AVD_HOME" | tee disk-before-emulator.txt
 
       - name: Start Android emulator
         shell: bash
@@ -104,7 +127,6 @@ jobs:
             -avd connectx-ci \
             -accel on \
             -memory 2048 \
-            -partition-size 2048 \
             -no-window \
             -noaudio \
             -no-boot-anim \
@@ -119,7 +141,7 @@ jobs:
           if ! kill -0 "$(cat emulator.pid)" 2>/dev/null; then
             cat accel-check.txt 2>/dev/null || true
             cat avd-list.txt 2>/dev/null || true
-            cat avd-storage.txt 2>/dev/null || true
+            cat disk-before-emulator.txt 2>/dev/null || true
             cat emulator.log
             exit 1
           fi
@@ -132,7 +154,7 @@ jobs:
             if ! kill -0 "$(cat emulator.pid)" 2>/dev/null; then
               cat accel-check.txt 2>/dev/null || true
               cat avd-list.txt 2>/dev/null || true
-              cat avd-storage.txt 2>/dev/null || true
+              cat disk-before-emulator.txt 2>/dev/null || true
               cat emulator.log
               exit 1
             fi
@@ -159,7 +181,7 @@ jobs:
           cp emulator.pid emulator-diagnostics/ 2>/dev/null || true
           cp accel-check.txt emulator-diagnostics/ 2>/dev/null || true
           cp avd-list.txt emulator-diagnostics/ 2>/dev/null || true
-          cp avd-storage.txt emulator-diagnostics/ 2>/dev/null || true
+          cp disk-before-emulator.txt emulator-diagnostics/ 2>/dev/null || true
           timeout 10 "$ADB" devices -l > emulator-diagnostics/devices.txt 2>&1 || true
           timeout 10 "$ADB" logcat -d > emulator-diagnostics/logcat.txt 2>&1 || true
           cp -R vpn/nativebridge/build/reports/androidTests emulator-diagnostics/reports 2>/dev/null || true
