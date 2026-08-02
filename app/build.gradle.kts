@@ -31,6 +31,12 @@ android {
         buildConfig = true
     }
 
+    sourceSets {
+        getByName("main") {
+            assets.srcDir(rootProject.file("licenses"))
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
