@@ -150,6 +150,15 @@ jobs:
           name: alpha3-native-${{ needs.verify.outputs.target_sha }}
           path: engine/go/build/android
 
+      - name: Free runtime runner disk
+        shell: bash
+        run: |
+          sudo rm -rf "$ANDROID_SDK_ROOT/ndk" "$ANDROID_SDK_ROOT/cmake"
+          sudo rm -rf "$ANDROID_SDK_ROOT/system-images"
+          sudo rm -rf /opt/hostedtoolcache/go
+          sudo apt-get clean
+          df -h / | tee disk-after-cleanup.txt
+
       - name: Verify KVM acceleration
         shell: bash
         run: |
@@ -178,15 +187,9 @@ jobs:
             --path "$ANDROID_AVD_HOME/connectx-release-ci.avd" \
             --package "system-images;android-35;google_apis;x86_64"
 
-          AVD_CONFIG="$ANDROID_AVD_HOME/connectx-release-ci.avd/config.ini"
-          test -f "$AVD_CONFIG"
-          sed -i '/^disk.dataPartition.size=/d' "$AVD_CONFIG"
-          sed -i '/^hw.ramSize=/d' "$AVD_CONFIG"
-          printf '\ndisk.dataPartition.size=2048M\nhw.ramSize=2048\n' >> "$AVD_CONFIG"
-          grep -E '^(disk.dataPartition.size|hw.ramSize)=' "$AVD_CONFIG" | tee avd-storage.txt
-
           "$ANDROID_SDK_ROOT/emulator/emulator" -list-avds | tee avd-list.txt
           grep -qx 'connectx-release-ci' avd-list.txt
+          df -h / | tee disk-before-emulator.txt
 
       - name: Start emulator and wait for Android
         shell: bash
@@ -198,7 +201,6 @@ jobs:
             -avd connectx-release-ci \
             -accel on \
             -memory 2048 \
-            -partition-size 2048 \
             -no-window \
             -noaudio \
             -no-boot-anim \
@@ -212,9 +214,9 @@ jobs:
 
           sleep 5
           if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
+            cat disk-before-emulator.txt 2>/dev/null || true
             cat accel-check.txt 2>/dev/null || true
             cat avd-list.txt 2>/dev/null || true
-            cat avd-storage.txt 2>/dev/null || true
             cat emulator.log
             exit 1
           fi
@@ -230,17 +232,13 @@ jobs:
             fi
             if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
               echo "Android emulator exited before boot completed" >&2
-              cat accel-check.txt 2>/dev/null || true
-              cat avd-list.txt 2>/dev/null || true
-              cat avd-storage.txt 2>/dev/null || true
+              cat disk-before-emulator.txt 2>/dev/null || true
               cat emulator.log
               exit 1
             fi
             if (( SECONDS >= DEADLINE )); then
               echo "Timed out waiting for Android boot" >&2
-              cat accel-check.txt 2>/dev/null || true
-              cat avd-list.txt 2>/dev/null || true
-              cat avd-storage.txt 2>/dev/null || true
+              cat disk-before-emulator.txt 2>/dev/null || true
               cat emulator.log
               exit 1
             fi
@@ -253,7 +251,7 @@ jobs:
       - name: Run native bridge Android smoke test
         run: gradle --no-daemon :vpn:nativebridge:connectedDebugAndroidTest
 
-      - name: Upload emulator diagnostics
+      - name: Collect emulator diagnostics
         if: always()
         shell: bash
         run: |
@@ -263,7 +261,8 @@ jobs:
           cp emulator.pid emulator-diagnostics/ 2>/dev/null || true
           cp accel-check.txt emulator-diagnostics/ 2>/dev/null || true
           cp avd-list.txt emulator-diagnostics/ 2>/dev/null || true
-          cp avd-storage.txt emulator-diagnostics/ 2>/dev/null || true
+          cp disk-after-cleanup.txt emulator-diagnostics/ 2>/dev/null || true
+          cp disk-before-emulator.txt emulator-diagnostics/ 2>/dev/null || true
           timeout 10 "$ADB" devices -l > emulator-diagnostics/devices.txt 2>&1 || true
           timeout 10 "$ADB" logcat -d > emulator-diagnostics/logcat.txt 2>&1 || true
           cp -R vpn/nativebridge/build/reports/androidTests \
