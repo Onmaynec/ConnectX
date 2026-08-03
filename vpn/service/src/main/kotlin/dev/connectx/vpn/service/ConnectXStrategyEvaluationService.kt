@@ -16,7 +16,6 @@ import androidx.core.app.NotificationCompat
 import dev.connectx.strategy.api.ApplicationProtocol
 import dev.connectx.strategy.api.NetworkProtocol
 import dev.connectx.strategy.api.StrategyContext
-import dev.connectx.strategy.api.StrategyEvaluationDecision
 import dev.connectx.strategy.api.StrategyEvaluationPolicy
 import dev.connectx.strategy.api.StrategyEvaluationReport
 import dev.connectx.strategy.api.StrategyFeatureGate
@@ -37,7 +36,6 @@ import dev.connectx.vpn.relay.ExactRelayTargetOverride
 import dev.connectx.vpn.relay.LoopbackTcpEchoServer
 import dev.connectx.vpn.relay.RelayStats
 import dev.connectx.vpn.relay.RelayTarget
-import dev.connectx.vpn.relay.RelayTargetResolver
 import dev.connectx.vpn.relay.SocketProtector
 import dev.connectx.vpn.relay.Socks5Credentials
 import java.io.DataInputStream
@@ -99,18 +97,16 @@ class ConnectXStrategyEvaluationService : VpnService() {
 
     private fun startEvaluation() {
         promoteToForeground()
-        val startedAt = SystemClock.elapsedRealtime()
-        val gate = synchronized(GATE_LOCK) {
-            processGate = processGate.refresh(startedAt).begin(startedAt)
-            processGate
-        }
-        check(gate.state == StrategySessionGateState.EVALUATING)
-
         if (hasActiveResources()) {
             closeResources()
         }
 
         try {
+            val startedAt = SystemClock.elapsedRealtime()
+            synchronized(GATE_LOCK) {
+                processGate = processGate.begin(startedAt)
+            }
+
             val localEchoServer = LoopbackTcpEchoServer(
                 maxPayloadBytes = MAX_PAYLOAD_BYTES,
             )
@@ -173,12 +169,7 @@ class ConnectXStrategyEvaluationService : VpnService() {
             )
             launchEvaluation()
         } catch (error: Throwable) {
-            synchronized(GATE_LOCK) {
-                processGate = processGate.abort(
-                    nowElapsedMillis = SystemClock.elapsedRealtime(),
-                    policy = EVALUATION_POLICY,
-                )
-            }
+            enterCooldownAfterFailure()
             val cleanupError = closeResources()
             publishStatus(
                 status = TunnelContract.STATUS_ERROR,
@@ -203,7 +194,9 @@ class ConnectXStrategyEvaluationService : VpnService() {
         generation = evaluationGeneration
         val thread = Thread(
             {
-                val outcome = runCatching { executeEvaluation() }
+                val outcome = runCatching {
+                    executeEvaluation(evaluationGeneration)
+                }
                 mainHandler.post {
                     completeEvaluation(evaluationGeneration, outcome)
                 }
@@ -214,10 +207,10 @@ class ConnectXStrategyEvaluationService : VpnService() {
         thread.start()
     }
 
-    private fun executeEvaluation(): StrategyEvaluationResult {
-        check(NativeTunBridge.isRunning()) {
-            "Native bridge остановился до strategy evaluation"
-        }
+    private fun executeEvaluation(
+        expectedGeneration: Long,
+    ): StrategyEvaluationResult {
+        checkEvaluationActive(expectedGeneration)
 
         val strategy = TlsClientHelloSplitStrategy()
         val payload = buildSyntheticClientHello()
@@ -242,7 +235,10 @@ class ConnectXStrategyEvaluationService : VpnService() {
         }
 
         Thread.sleep(ROUTE_SETTLE_MILLIS)
+        checkEvaluationActive(expectedGeneration)
+
         val baseline = runPhase(
+            expectedGeneration = expectedGeneration,
             payload = payload,
             segments = listOf(payload),
             writeGapMillis = 0L,
@@ -250,6 +246,7 @@ class ConnectXStrategyEvaluationService : VpnService() {
 
         val strategyPhase = if (baseline.sample is StrategyHealthSample.Success) {
             runPhase(
+                expectedGeneration = expectedGeneration,
                 payload = payload,
                 segments = plan.segments,
                 writeGapMillis = STRATEGY_WRITE_GAP_MILLIS,
@@ -266,6 +263,7 @@ class ConnectXStrategyEvaluationService : VpnService() {
         // strategy attempt. It is skipped only when baseline never worked.
         val recovery = if (baseline.sample is StrategyHealthSample.Success) {
             runPhase(
+                expectedGeneration = expectedGeneration,
                 payload = payload,
                 segments = listOf(payload),
                 writeGapMillis = 0L,
@@ -278,6 +276,7 @@ class ConnectXStrategyEvaluationService : VpnService() {
             )
         }
 
+        checkEvaluationActive(expectedGeneration)
         val report = StrategyHealthEvaluator(EVALUATION_POLICY).evaluate(
             strategyId = strategy.descriptor.id,
             baselineSamples = listOf(baseline.sample),
@@ -305,16 +304,19 @@ class ConnectXStrategyEvaluationService : VpnService() {
     }
 
     private fun runPhase(
+        expectedGeneration: Long,
         payload: ByteArray,
         segments: List<ByteArray>,
         writeGapMillis: Long,
     ): PhaseOutcome {
-        check(generation > 0L) { "Strategy evaluation была отменена" }
-        check(NativeTunBridge.isRunning()) {
-            "Native bridge остановился во время strategy evaluation"
-        }
+        checkEvaluationActive(expectedGeneration)
         return try {
-            val exchange = executeExchange(payload, segments, writeGapMillis)
+            val exchange = executeExchange(
+                expectedGeneration = expectedGeneration,
+                payload = payload,
+                segments = segments,
+                writeGapMillis = writeGapMillis,
+            )
             PhaseOutcome(
                 sample = StrategyHealthSample.Success(exchange.latencyMillis),
                 latencyMillis = exchange.latencyMillis,
@@ -331,12 +333,15 @@ class ConnectXStrategyEvaluationService : VpnService() {
     }
 
     private fun executeExchange(
+        expectedGeneration: Long,
         payload: ByteArray,
         segments: List<ByteArray>,
         writeGapMillis: Long,
     ): ExchangeResult {
         require(segments.isNotEmpty()) { "Exchange requires at least one segment" }
-        require(segments.none(ByteArray::isEmpty)) { "Exchange segments must not be empty" }
+        require(segments.none { it.isEmpty() }) {
+            "Exchange segments must not be empty"
+        }
         val reconstructed = ByteArray(segments.sumOf(ByteArray::size))
         var reconstructedOffset = 0
         segments.forEach { segment ->
@@ -346,6 +351,7 @@ class ConnectXStrategyEvaluationService : VpnService() {
         check(payload.contentEquals(reconstructed)) {
             "Exchange segments changed the synthetic ClientHello"
         }
+        checkEvaluationActive(expectedGeneration)
 
         val before = checkNotNull(relay) {
             "SOCKS5 relay отсутствует во время strategy evaluation"
@@ -364,6 +370,7 @@ class ConnectXStrategyEvaluationService : VpnService() {
             )
             val output = socket.getOutputStream()
             segments.forEachIndexed { index, segment ->
+                checkEvaluationActive(expectedGeneration)
                 output.write(segment)
                 output.flush()
                 if (writeGapMillis > 0L && index + 1 < segments.size) {
@@ -373,6 +380,7 @@ class ConnectXStrategyEvaluationService : VpnService() {
 
             val echoed = ByteArray(payload.size)
             DataInputStream(socket.getInputStream()).readFully(echoed)
+            checkEvaluationActive(expectedGeneration)
             if (!payload.contentEquals(echoed)) {
                 throw PayloadMismatchException(
                     "Strategy evaluation получила изменённый echo payload",
@@ -380,6 +388,7 @@ class ConnectXStrategyEvaluationService : VpnService() {
             }
 
             val after = awaitRelayStats(
+                expectedGeneration = expectedGeneration,
                 before = before,
                 payloadBytes = payload.size.toLong(),
             )
@@ -396,6 +405,7 @@ class ConnectXStrategyEvaluationService : VpnService() {
     }
 
     private fun awaitRelayStats(
+        expectedGeneration: Long,
         before: RelayStats,
         payloadBytes: Long,
     ): RelayStats {
@@ -412,9 +422,11 @@ class ConnectXStrategyEvaluationService : VpnService() {
                 ) &&
             SystemClock.elapsedRealtime() < deadline
         ) {
+            checkEvaluationActive(expectedGeneration)
             Thread.sleep(STATS_POLL_MILLIS)
             stats = localRelay.stats()
         }
+        checkEvaluationActive(expectedGeneration)
         check(stats.acceptedConnections >= before.acceptedConnections + 1L) {
             "Relay не подтвердил отдельное strategy evaluation соединение"
         }
@@ -427,12 +439,28 @@ class ConnectXStrategyEvaluationService : VpnService() {
         return stats
     }
 
+    private fun checkEvaluationActive(expectedGeneration: Long) {
+        check(expectedGeneration == generation) {
+            "Strategy evaluation была отменена"
+        }
+        check(NativeTunBridge.isRunning()) {
+            "Native bridge остановился во время strategy evaluation"
+        }
+    }
+
     private fun classifyFailure(error: Throwable): StrategySampleFailure = when (error) {
         is PayloadMismatchException -> StrategySampleFailure.PAYLOAD_MISMATCH
         is SocketTimeoutException -> StrategySampleFailure.TIMEOUT
         is IOException -> StrategySampleFailure.CONNECTION_FAILED
         is IllegalArgumentException -> StrategySampleFailure.STRATEGY_REFUSED
         is InterruptedException -> StrategySampleFailure.CANCELLED
+        is IllegalStateException -> {
+            if (error.message?.contains("отменена") == true) {
+                StrategySampleFailure.CANCELLED
+            } else {
+                StrategySampleFailure.INTERNAL_ERROR
+            }
+        }
         else -> StrategySampleFailure.INTERNAL_ERROR
     }
 
@@ -452,14 +480,7 @@ class ConnectXStrategyEvaluationService : VpnService() {
                 result = result,
             )
         } else {
-            synchronized(GATE_LOCK) {
-                if (processGate.state == StrategySessionGateState.EVALUATING) {
-                    processGate = processGate.abort(
-                        nowElapsedMillis = SystemClock.elapsedRealtime(),
-                        policy = EVALUATION_POLICY,
-                    )
-                }
-            }
+            enterCooldownAfterFailure()
             val primary = outcome.exceptionOrNull()
                 ?: IllegalStateException(
                     "Strategy evaluation завершена, но ресурсы закрылись с ошибкой",
@@ -475,14 +496,7 @@ class ConnectXStrategyEvaluationService : VpnService() {
     }
 
     private fun stopEvaluationAndService() {
-        synchronized(GATE_LOCK) {
-            if (processGate.state == StrategySessionGateState.EVALUATING) {
-                processGate = processGate.abort(
-                    nowElapsedMillis = SystemClock.elapsedRealtime(),
-                    policy = EVALUATION_POLICY,
-                )
-            }
-        }
+        enterCooldownAfterFailure()
         val cleanupError = closeResources()
         if (cleanupError == null) {
             publishStatus(status = TunnelContract.STATUS_STOPPED)
@@ -495,6 +509,28 @@ class ConnectXStrategyEvaluationService : VpnService() {
         }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun enterCooldownAfterFailure() {
+        val now = SystemClock.elapsedRealtime()
+        synchronized(GATE_LOCK) {
+            processGate = when (processGate.state) {
+                StrategySessionGateState.EVALUATING ->
+                    processGate.abort(now, EVALUATION_POLICY)
+                StrategySessionGateState.LAB_APPROVED ->
+                    processGate
+                        .resetApprovedSession()
+                        .begin(now)
+                        .abort(now, EVALUATION_POLICY)
+                StrategySessionGateState.READY ->
+                    processGate
+                        .begin(now)
+                        .abort(now, EVALUATION_POLICY)
+                StrategySessionGateState.COOLDOWN,
+                StrategySessionGateState.DISABLED,
+                -> processGate
+            }
+        }
     }
 
     private fun closeResources(): Throwable? {
