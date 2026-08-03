@@ -91,11 +91,14 @@ jobs:
           set -euo pipefail
           grep -q 'versionCode = 9' app/build.gradle.kts
           grep -q 'versionName = "0.3.0-alpha.2"' app/build.gradle.kts
+          grep -q '^## \[0.3.0-alpha.2\]' CHANGELOG.md
           test -s docs/releases/v0.3.0-alpha.2.md
           test -s docs/architecture/strategy-evaluation.md
           test -s THIRD_PARTY_NOTICES.md
           test -s licenses/tun2socks-MIT.txt
           test -s licenses/gvisor-LICENSE.txt
+          test ! -e docs/releases/v0.3.0-alpha.2.publish || \
+            grep -q 'Publish v0.3.0-alpha.2' docs/releases/v0.3.0-alpha.2.publish
 
       - name: Download exact Android CI artifacts
         env:
@@ -143,6 +146,7 @@ jobs:
           cp licenses/tun2socks-MIT.txt release-assets/tun2socks-MIT.txt
           cp licenses/gvisor-LICENSE.txt release-assets/gvisor-LICENSE.txt
           (cd release-assets && sha256sum * > CHECKSUMS.txt)
+          test -s release-assets/CHECKSUMS.txt
 
       - name: Upload prepared release assets
         uses: actions/upload-artifact@v4
@@ -152,7 +156,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Publish GitHub prerelease
+      - name: Publish or repair GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: v0.3.0-alpha.2
@@ -160,12 +164,58 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            echo "Release $TAG_NAME already exists; nothing to do."
+
+          resolve_tag_commit() {
+            local ref_json object_type object_sha tag_json
+            ref_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG_NAME")"
+            object_type="$(jq -r '.object.type' <<<"$ref_json")"
+            object_sha="$(jq -r '.object.sha' <<<"$ref_json")"
+
+            if [[ "$object_type" == "tag" ]]; then
+              tag_json="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
+              object_type="$(jq -r '.object.type' <<<"$tag_json")"
+              object_sha="$(jq -r '.object.sha' <<<"$tag_json")"
+            fi
+
+            if [[ "$object_type" != "commit" ]]; then
+              echo "Tag $TAG_NAME does not resolve to a commit." >&2
+              return 1
+            fi
+            printf '%s\n' "$object_sha"
+          }
+
+          if gh release view "$TAG_NAME" \
+            --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            existing_sha="$(resolve_tag_commit)"
+            if [[ "$existing_sha" != "$TARGET_SHA" ]]; then
+              echo "Existing tag $TAG_NAME points to $existing_sha, expected $TARGET_SHA."
+              exit 1
+            fi
+
+            metadata="$(gh release view "$TAG_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json isPrerelease)"
+            if [[ "$(jq -r '.isPrerelease' <<<"$metadata")" != "true" ]]; then
+              echo "Existing release $TAG_NAME is not marked as a prerelease."
+              exit 1
+            fi
+
+            gh release upload "$TAG_NAME" \
+              release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+            gh release edit "$TAG_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "ConnectX v0.3.0-alpha.2 — Strategy Evaluation and Rollback Gate" \
+              --notes-file docs/releases/v0.3.0-alpha.2.md \
+              --prerelease
+            echo "Verified and repaired existing prerelease $TAG_NAME at $TARGET_SHA."
             exit 0
           fi
+
           gh release create "$TAG_NAME" \
             release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
             --target "$TARGET_SHA" \
             --title "ConnectX v0.3.0-alpha.2 — Strategy Evaluation and Rollback Gate" \
             --notes-file docs/releases/v0.3.0-alpha.2.md \
