@@ -103,6 +103,12 @@ class NativeTunBridge private constructor() {
             return nativeLastError()
         }
 
+        /** Payload-free counts of flows delivered by gVisor to tun2socks. */
+        fun transportDiagnostics(): String {
+            requireLoaded()
+            return nativeTransportDiagnostics()
+        }
+
         private fun requireLoaded() {
             check(loadFailure == null) {
                 "ConnectX native bridge is unavailable: ${loadFailure?.message ?: "unknown error"}"
@@ -130,6 +136,9 @@ class NativeTunBridge private constructor() {
 
         @JvmStatic
         private external fun nativeLastError(): String
+
+        @JvmStatic
+        private external fun nativeTransportDiagnostics(): String
     }
 }
 
