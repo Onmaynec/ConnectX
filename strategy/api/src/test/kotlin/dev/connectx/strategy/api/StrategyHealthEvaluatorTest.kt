@@ -203,7 +203,24 @@ class StrategyHealthEvaluatorTest {
     }
 
     @Test
-    fun approvedSessionRequiresExplicitResetAndDisableIsTerminal() {
+    fun interruptedEvaluationEntersCooldown() {
+        val policy = StrategyEvaluationPolicy(cooldownMillis = 5_000L)
+        val aborted = StrategySessionGate()
+            .begin(1_000L)
+            .abort(
+                nowElapsedMillis = 2_000L,
+                policy = policy,
+            )
+
+        assertEquals(StrategySessionGateState.COOLDOWN, aborted.state)
+        assertEquals(7_000L, aborted.cooldownUntilElapsedMillis)
+        assertEquals(StrategyEvaluationDecision.INCONCLUSIVE, aborted.lastDecision)
+        assertThrows(IllegalStateException::class.java) { aborted.begin(6_999L) }
+        assertEquals(StrategySessionGateState.EVALUATING, aborted.begin(7_000L).state)
+    }
+
+    @Test
+    fun approvedSessionCanBeReevaluatedOnlyByNewExplicitBegin() {
         val keep = evaluator().evaluate(
             strategyId = strategyId,
             baselineSamples = successes(10L),
@@ -215,13 +232,28 @@ class StrategyHealthEvaluatorTest {
             .complete(keep, 1L)
 
         assertEquals(StrategySessionGateState.LAB_APPROVED, approved.state)
-        assertThrows(IllegalStateException::class.java) { approved.begin(2L) }
+        val reevaluating = approved.begin(2L)
+        assertEquals(StrategySessionGateState.EVALUATING, reevaluating.state)
+        assertNull(reevaluating.lastDecision)
         assertEquals(StrategySessionGateState.READY, approved.resetApprovedSession().state)
 
         val disabled = approved.disable()
         assertEquals(StrategySessionGateState.DISABLED, disabled.state)
         assertFalse(disabled.refresh(Long.MAX_VALUE).state == StrategySessionGateState.READY)
         assertThrows(IllegalStateException::class.java) { disabled.begin(Long.MAX_VALUE) }
+    }
+
+    @Test
+    fun gateStateAndDeadlineInvariantIsValidated() {
+        assertThrows(IllegalArgumentException::class.java) {
+            StrategySessionGate(
+                state = StrategySessionGateState.READY,
+                cooldownUntilElapsedMillis = 1L,
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            StrategySessionGate(state = StrategySessionGateState.COOLDOWN)
+        }
     }
 
     @Test
