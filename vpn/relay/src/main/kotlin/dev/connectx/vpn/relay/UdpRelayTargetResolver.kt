@@ -20,6 +20,7 @@ class ExactUdpRelayTargetOverride(
 ) : UdpRelayTargetResolver {
     override fun resolve(host: String, port: Int): RelayTarget {
         if (host == source.host && port == source.port) {
+            UdpProbeTrace.onDatagramResolved()
             return destination
         }
         throw IllegalArgumentException(
