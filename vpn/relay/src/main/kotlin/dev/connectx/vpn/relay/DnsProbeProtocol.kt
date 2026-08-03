@@ -38,10 +38,10 @@ object DnsProbeProtocol {
         val output = ByteWriter(MAX_PACKET_BYTES)
         output.writeU16(transactionId)
         output.writeU16(QUERY_FLAGS)
-        output.writeU16(1) // QDCOUNT
-        output.writeU16(0) // ANCOUNT
-        output.writeU16(0) // NSCOUNT
-        output.writeU16(0) // ARCOUNT
+        output.writeU16(1)
+        output.writeU16(0)
+        output.writeU16(0)
+        output.writeU16(0)
         output.writeName(PROBE_NAME)
         output.writeU16(TYPE_A)
         output.writeU16(CLASS_IN)
@@ -70,10 +70,10 @@ object DnsProbeProtocol {
         val output = ByteWriter(MAX_PACKET_BYTES)
         output.writeU16(query.transactionId)
         output.writeU16(RESPONSE_FLAGS)
-        output.writeU16(1) // QDCOUNT
-        output.writeU16(1) // ANCOUNT
-        output.writeU16(0) // NSCOUNT
-        output.writeU16(0) // ARCOUNT
+        output.writeU16(1)
+        output.writeU16(1)
+        output.writeU16(0)
+        output.writeU16(0)
         output.writeBytes(queryPacket, QUESTION_OFFSET, query.questionEndOffset - QUESTION_OFFSET)
         output.writeU16(ANSWER_NAME_POINTER)
         output.writeU16(TYPE_A)
@@ -211,7 +211,7 @@ object DnsProbeProtocol {
                 append(encoded.size.toByte())
                 writeBytes(encoded)
             }
-            append(0)
+            append(0.toByte())
         }
 
         fun writeBytes(source: ByteArray, offset: Int = 0, count: Int = source.size) {
