@@ -11,6 +11,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.connectx.vpn.api.TunnelContract
 import dev.connectx.vpn.nativebridge.NativeTunBridge
+import dev.connectx.vpn.relay.UdpProbeTrace
 import dev.connectx.vpn.service.ConnectXTunnelService
 import java.io.FileInputStream
 import java.util.concurrent.LinkedBlockingQueue
@@ -38,6 +39,7 @@ class NativeUdpProbeInstrumentedTest {
             }
         }
 
+        UdpProbeTrace.reset()
         ContextCompat.registerReceiver(
             context,
             receiver,
@@ -71,8 +73,14 @@ class NativeUdpProbeInstrumentedTest {
             ContextCompat.startForegroundService(context, startIntent)
 
             val result = awaitTerminalStatus(statuses)
+            val trace = UdpProbeTrace.snapshot()
+            val failure = buildString {
+                append(result.getStringExtra(TunnelContract.EXTRA_ERROR))
+                append("; udpTrace=")
+                append(trace)
+            }
             assertEquals(
-                result.getStringExtra(TunnelContract.EXTRA_ERROR),
+                failure,
                 TunnelContract.STATUS_UDP_PROBE_SUCCEEDED,
                 result.getStringExtra(TunnelContract.EXTRA_STATUS),
             )
@@ -103,6 +111,9 @@ class NativeUdpProbeInstrumentedTest {
             assertTrue(
                 result.getLongExtra(TunnelContract.EXTRA_PROBE_DATAGRAMS, 0L) >= 1L,
             )
+            assertTrue(trace.resolvedDatagrams >= 1L)
+            assertTrue(trace.echoReceives >= 1L)
+            assertTrue(trace.echoSends >= 1L)
             assertFalse(NativeTunBridge.isRunning())
         } finally {
             val stopIntent = Intent(context, ConnectXTunnelService::class.java).apply {
