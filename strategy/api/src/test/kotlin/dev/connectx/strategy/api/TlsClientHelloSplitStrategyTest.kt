@@ -33,6 +33,7 @@ class TlsClientHelloSplitStrategyTest {
     @Test
     fun validClientHelloProducesTwoOrderedLosslessSegments() {
         val payload = validClientHello()
+        val expected = payload.copyOf()
         val plan = strategy.plan(payload, labContext, enabledGate)
 
         assertTrue(plan is StrategyPlan.Segmented)
@@ -41,10 +42,15 @@ class TlsClientHelloSplitStrategyTest {
         assertEquals(2, plan.segments.size)
         assertEquals(43, plan.segments[0].size)
         assertEquals(1, plan.segments[1].size)
-        assertArrayEquals(payload, plan.reconstruct())
+        assertArrayEquals(expected, plan.reconstruct())
 
         payload.fill(0)
-        assertFalse(plan.reconstruct().all { it == 0.toByte() })
+        assertArrayEquals(expected, plan.reconstruct())
+
+        val exposedSegments = plan.segments
+        exposedSegments.forEach { it.fill(0) }
+        assertArrayEquals(expected, plan.reconstruct())
+        assertFalse(plan.segments.flattenBytes().all { it == 0.toByte() })
     }
 
     @Test
@@ -175,5 +181,15 @@ class TlsClientHelloSplitStrategyTest {
             record[4] = handshake.size.toByte()
             handshake.copyInto(record, destinationOffset = 5)
         }
+    }
+
+    private fun List<ByteArray>.flattenBytes(): ByteArray {
+        val output = ByteArray(sumOf(ByteArray::size))
+        var offset = 0
+        forEach { segment ->
+            segment.copyInto(output, destinationOffset = offset)
+            offset += segment.size
+        }
+        return output
     }
 }
