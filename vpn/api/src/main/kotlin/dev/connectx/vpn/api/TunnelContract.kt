@@ -16,15 +16,20 @@ object TunnelContract {
     const val EXTRA_PROBE_RELAY_CONNECTIONS = "dev.connectx.extra.PROBE_RELAY_CONNECTIONS"
     const val EXTRA_PROBE_RELAY_ASSOCIATIONS = "dev.connectx.extra.PROBE_RELAY_ASSOCIATIONS"
     const val EXTRA_PROBE_DATAGRAMS = "dev.connectx.extra.PROBE_DATAGRAMS"
+    const val EXTRA_PROBE_DNS_QUERIES = "dev.connectx.extra.PROBE_DNS_QUERIES"
+    const val EXTRA_PROBE_DNS_RESPONSES = "dev.connectx.extra.PROBE_DNS_RESPONSES"
+    const val EXTRA_PROBE_DNS_ANSWER = "dev.connectx.extra.PROBE_DNS_ANSWER"
 
     const val MODE_FOUNDATION = "foundation"
     const val MODE_NATIVE_SELF_TEST = "native_self_test"
     const val MODE_NATIVE_TCP_PROBE = "native_tcp_probe"
     const val MODE_NATIVE_UDP_PROBE = "native_udp_probe"
+    const val MODE_NATIVE_DNS_PROBE = "native_dns_probe"
 
     const val STATUS_STARTED = "started"
     const val STATUS_STOPPED = "stopped"
     const val STATUS_PROBE_SUCCEEDED = "probe_succeeded"
     const val STATUS_UDP_PROBE_SUCCEEDED = "udp_probe_succeeded"
+    const val STATUS_DNS_PROBE_SUCCEEDED = "dns_probe_succeeded"
     const val STATUS_ERROR = "error"
 }

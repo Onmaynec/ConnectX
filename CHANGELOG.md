@@ -7,8 +7,48 @@ All notable changes to ConnectX are documented in this file.
 ### Planned
 
 - Physical-device repeated TUN lifecycle verification.
-- Bounded DNS query path probe.
 - First verified DPI-obfuscation strategy.
+
+## [0.2.0-alpha.6]
+
+### Added
+
+- Explicit `Native DNS probe` mode and dedicated foreground `VpnService`.
+- Strict bounded DNS codec without additional runtime dependencies.
+- One exact uncompressed `A/IN connectx.invalid` request with a random transaction ID.
+- Deterministic authoritative non-recursive answer `192.0.2.42`.
+- Loopback-only DNS responder that never forwards requests to an external resolver.
+- Exact UDP allow-list limited to `192.0.2.53:53`.
+- Protected outbound relay datagram socket through `VpnService.protect()`.
+- DNS latency, uploaded/downloaded bytes, association, datagram, query and response counters.
+- DNS reducer state and Compose diagnostics.
+- JVM tests for DNS encoding, decoding, malformed packets and the real loopback responder.
+- Android instrumentation gate for the full DNS path through TUN, gVisor/tun2socks and authenticated SOCKS5 UDP relay.
+- Isolated Android runtime sessions for JNI, TCP, UDP and DNS gates with explicit process teardown between tests.
+- Per-gate Android reports retained in the emulator diagnostics artifact.
+- Native bridge version synchronized to `0.2.0-alpha.6`.
+
+### Rejected inputs
+
+- compressed DNS names;
+- multiple questions;
+- non-`A` query types;
+- non-`IN` classes;
+- unexpected flags, sections, answer address or transaction ID;
+- truncated, oversized or trailing packet data;
+- every target except `192.0.2.53:53`.
+
+### Safety boundaries
+
+- TUN capture remains limited to TEST-NET-1 (`192.0.2.0/24`).
+- No default IPv4 or IPv6 route is added.
+- System DNS traffic is not intercepted.
+- No external DNS resolver is contacted.
+- The responder and authenticated relay bind only to `127.0.0.1`.
+- Query names, payloads and SOCKS credentials are not logged.
+- IPv6, QUIC and DPI obfuscation remain disabled.
+- No remote ConnectX server, HTTPS interception or certificate installation is used.
+- This release does not claim working censorship bypass.
 
 ## [0.2.0-alpha.5]
 

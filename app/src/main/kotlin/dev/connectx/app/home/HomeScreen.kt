@@ -39,6 +39,7 @@ fun HomeScreen(
     onNativeSelfTest: () -> Unit,
     onNativeTcpProbe: () -> Unit,
     onNativeUdpProbe: () -> Unit,
+    onNativeDnsProbe: () -> Unit,
 ) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -121,7 +122,7 @@ fun HomeScreen(
                 Box(modifier = Modifier.padding(20.dp)) {
                     Column {
                         Text(
-                            text = "Native diagnostics · v0.2.0-a5",
+                            text = "Native diagnostics · v0.2.0-a6",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -176,6 +177,21 @@ fun HomeScreen(
                                 textAlign = TextAlign.Center,
                             )
                         }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onNativeDnsProbe,
+                            enabled = diagnosticsActionEnabled(uiState),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = if (uiState.dnsProbe.running) {
+                                    "DNS probe выполняется"
+                                } else {
+                                    "Проверить DNS-путь через TUN"
+                                },
+                                textAlign = TextAlign.Center,
+                            )
+                        }
                     }
                 }
             }
@@ -194,6 +210,7 @@ private fun statusTitle(uiState: ConnectionUiState): String = when (uiState.stat
         EngineMode.NATIVE_SELF_TEST -> "Запуск native self-test"
         EngineMode.NATIVE_TCP_PROBE -> "Подготовка TCP probe"
         EngineMode.NATIVE_UDP_PROBE -> "Подготовка UDP probe"
+        EngineMode.NATIVE_DNS_PROBE -> "Подготовка DNS probe"
         EngineMode.FOUNDATION -> "Запуск сетевого ядра"
     }
 
@@ -201,6 +218,7 @@ private fun statusTitle(uiState: ConnectionUiState): String = when (uiState.stat
         EngineMode.NATIVE_SELF_TEST -> "Native self-test активен"
         EngineMode.NATIVE_TCP_PROBE -> "TCP-пакет проходит через TUN"
         EngineMode.NATIVE_UDP_PROBE -> "UDP-пакет проходит через TUN"
+        EngineMode.NATIVE_DNS_PROBE -> "DNS-запрос проходит через TUN"
         EngineMode.FOUNDATION -> "Сетевое ядро готово"
     }
 
@@ -267,9 +285,40 @@ private fun diagnosticsText(uiState: ConnectionUiState): String {
         false -> listOfNotNull(uiState.udpProbe.error?.let { "UDP probe: $it" })
         null -> emptyList()
     }
+    val dnsProbeDetails = when (uiState.dnsProbe.lastSuccess) {
+        true -> listOfNotNull(
+            uiState.dnsProbe.latencyMillis?.let { "DNS probe: ${it} мс" },
+            uiState.dnsProbe.answer?.let { "Ответ connectx.invalid: $it" },
+            if (
+                uiState.dnsProbe.uploadedBytes != null &&
+                uiState.dnsProbe.downloadedBytes != null
+            ) {
+                "DNS relay: ↑${uiState.dnsProbe.uploadedBytes} Б · ↓${uiState.dnsProbe.downloadedBytes} Б"
+            } else {
+                null
+            },
+            uiState.dnsProbe.relayAssociations?.let { "DNS associations: $it" },
+            uiState.dnsProbe.datagrams?.let { "DNS datagrams: $it" },
+            if (uiState.dnsProbe.queries != null && uiState.dnsProbe.responses != null) {
+                "DNS responder: ${uiState.dnsProbe.queries} запрос · ${uiState.dnsProbe.responses} ответ"
+            } else {
+                null
+            },
+        )
 
-    val safety = "Диагностика использует только 192.0.2.0/24; DNS и обычный интернет-трафик не перехватываются."
-    return (listOf(availability) + nativeDetails + tcpProbeDetails + udpProbeDetails + safety)
+        false -> listOfNotNull(uiState.dnsProbe.error?.let { "DNS probe: $it" })
+        null -> emptyList()
+    }
+
+    val safety = "Диагностика использует только 192.0.2.0/24; системный DNS и обычный интернет-трафик не перехватываются."
+    return (
+        listOf(availability) +
+            nativeDetails +
+            tcpProbeDetails +
+            udpProbeDetails +
+            dnsProbeDetails +
+            safety
+        )
         .filter { it.isNotBlank() }
         .joinToString(separator = "\n")
 }

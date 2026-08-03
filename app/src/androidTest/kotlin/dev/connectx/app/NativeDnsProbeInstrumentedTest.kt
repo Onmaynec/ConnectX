@@ -11,7 +11,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.connectx.vpn.api.TunnelContract
 import dev.connectx.vpn.nativebridge.NativeTunBridge
-import dev.connectx.vpn.service.ConnectXTunnelService
+import dev.connectx.vpn.relay.DnsProbeProtocol
+import dev.connectx.vpn.service.ConnectXDnsProbeService
 import java.io.FileInputStream
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -24,9 +25,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
-class NativeTcpProbeInstrumentedTest {
+class NativeDnsProbeInstrumentedTest {
     @Test
-    fun boundedProbeTraversesRealVpnTunNativeStackAndRelay() {
+    fun boundedDnsProbeTraversesRealVpnTunAndReturnsDeterministicAnswer() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val packageName = context.packageName
@@ -61,23 +62,29 @@ class NativeTcpProbeInstrumentedTest {
             )
             instrumentation.waitForIdleSync()
 
-            val startIntent = Intent(context, ConnectXTunnelService::class.java).apply {
+            val startIntent = Intent(context, ConnectXDnsProbeService::class.java).apply {
                 action = TunnelContract.ACTION_START
                 putExtra(
                     TunnelContract.EXTRA_ENGINE_MODE,
-                    TunnelContract.MODE_NATIVE_TCP_PROBE,
+                    TunnelContract.MODE_NATIVE_DNS_PROBE,
                 )
             }
             ContextCompat.startForegroundService(context, startIntent)
 
             val result = awaitTerminalStatus(statuses)
+            val nativeTrace = NativeTunBridge.transportDiagnostics()
+            val failure = buildString {
+                append(result.getStringExtra(TunnelContract.EXTRA_ERROR))
+                append("; nativeTrace=")
+                append(nativeTrace)
+            }
             assertEquals(
-                result.getStringExtra(TunnelContract.EXTRA_ERROR),
-                TunnelContract.STATUS_PROBE_SUCCEEDED,
+                failure,
+                TunnelContract.STATUS_DNS_PROBE_SUCCEEDED,
                 result.getStringExtra(TunnelContract.EXTRA_STATUS),
             )
             assertEquals(
-                TunnelContract.MODE_NATIVE_TCP_PROBE,
+                TunnelContract.MODE_NATIVE_DNS_PROBE,
                 result.getStringExtra(TunnelContract.EXTRA_ENGINE_MODE),
             )
             assertTrue(
@@ -91,18 +98,32 @@ class NativeTcpProbeInstrumentedTest {
             )
             assertTrue(
                 result.getLongExtra(TunnelContract.EXTRA_PROBE_UPLOADED_BYTES, 0L) >=
-                    PROBE_PAYLOAD_BYTES,
+                    DnsProbeProtocol.buildQuery(1).size.toLong(),
             )
             assertTrue(
                 result.getLongExtra(TunnelContract.EXTRA_PROBE_DOWNLOADED_BYTES, 0L) >=
-                    PROBE_PAYLOAD_BYTES,
+                    DnsProbeProtocol.buildResponse(DnsProbeProtocol.buildQuery(1)).size.toLong(),
             )
             assertTrue(
-                result.getLongExtra(TunnelContract.EXTRA_PROBE_RELAY_CONNECTIONS, 0L) >= 1L,
+                result.getLongExtra(TunnelContract.EXTRA_PROBE_RELAY_ASSOCIATIONS, 0L) >= 1L,
             )
+            assertTrue(
+                result.getLongExtra(TunnelContract.EXTRA_PROBE_DATAGRAMS, 0L) >= 1L,
+            )
+            assertTrue(
+                result.getLongExtra(TunnelContract.EXTRA_PROBE_DNS_QUERIES, 0L) >= 1L,
+            )
+            assertTrue(
+                result.getLongExtra(TunnelContract.EXTRA_PROBE_DNS_RESPONSES, 0L) >= 1L,
+            )
+            assertEquals(
+                DnsProbeProtocol.PROBE_ANSWER,
+                result.getStringExtra(TunnelContract.EXTRA_PROBE_DNS_ANSWER),
+            )
+            assertTrue(nativeTrace.contains("udpFlows="))
             assertFalse(NativeTunBridge.isRunning())
         } finally {
-            val stopIntent = Intent(context, ConnectXTunnelService::class.java).apply {
+            val stopIntent = Intent(context, ConnectXDnsProbeService::class.java).apply {
                 action = TunnelContract.ACTION_STOP
             }
             runCatching { context.startService(stopIntent) }
@@ -119,12 +140,12 @@ class NativeTcpProbeInstrumentedTest {
             val status = statuses.poll(remainingNanos, TimeUnit.NANOSECONDS)
                 ?: break
             when (status.getStringExtra(TunnelContract.EXTRA_STATUS)) {
-                TunnelContract.STATUS_PROBE_SUCCEEDED,
+                TunnelContract.STATUS_DNS_PROBE_SUCCEEDED,
                 TunnelContract.STATUS_ERROR,
                 -> return status
             }
         }
-        fail("Timed out waiting for terminal native TCP probe status")
+        fail("Timed out waiting for terminal native DNS probe status")
         error("unreachable")
     }
 
@@ -140,7 +161,6 @@ class NativeTcpProbeInstrumentedTest {
     }
 
     private companion object {
-        const val PROBE_PAYLOAD_BYTES = 64L
-        const val PROBE_TIMEOUT_SECONDS = 30L
+        const val PROBE_TIMEOUT_SECONDS = 40L
     }
 }
