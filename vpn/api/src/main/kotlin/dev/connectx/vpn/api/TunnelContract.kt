@@ -19,17 +19,22 @@ object TunnelContract {
     const val EXTRA_PROBE_DNS_QUERIES = "dev.connectx.extra.PROBE_DNS_QUERIES"
     const val EXTRA_PROBE_DNS_RESPONSES = "dev.connectx.extra.PROBE_DNS_RESPONSES"
     const val EXTRA_PROBE_DNS_ANSWER = "dev.connectx.extra.PROBE_DNS_ANSWER"
+    const val EXTRA_STRATEGY_ID = "dev.connectx.extra.STRATEGY_ID"
+    const val EXTRA_STRATEGY_SEGMENTS = "dev.connectx.extra.STRATEGY_SEGMENTS"
+    const val EXTRA_STRATEGY_SPLIT_OFFSET = "dev.connectx.extra.STRATEGY_SPLIT_OFFSET"
 
     const val MODE_FOUNDATION = "foundation"
     const val MODE_NATIVE_SELF_TEST = "native_self_test"
     const val MODE_NATIVE_TCP_PROBE = "native_tcp_probe"
     const val MODE_NATIVE_UDP_PROBE = "native_udp_probe"
     const val MODE_NATIVE_DNS_PROBE = "native_dns_probe"
+    const val MODE_NATIVE_TLS_SPLIT_PROBE = "native_tls_split_probe"
 
     const val STATUS_STARTED = "started"
     const val STATUS_STOPPED = "stopped"
     const val STATUS_PROBE_SUCCEEDED = "probe_succeeded"
     const val STATUS_UDP_PROBE_SUCCEEDED = "udp_probe_succeeded"
     const val STATUS_DNS_PROBE_SUCCEEDED = "dns_probe_succeeded"
+    const val STATUS_STRATEGY_PROBE_SUCCEEDED = "strategy_probe_succeeded"
     const val STATUS_ERROR = "error"
 }
