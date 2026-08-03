@@ -1,0 +1,1 @@
+Publish ConnectX v0.2.0-alpha.6 from the exact merge commit after all guarded build, JNI, TCP, UDP and DNS release gates pass.
