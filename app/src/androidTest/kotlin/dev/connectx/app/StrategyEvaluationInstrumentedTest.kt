@@ -65,17 +65,10 @@ class StrategyEvaluationInstrumentedTest {
             )
             instrumentation.waitForIdleSync()
 
-            val startIntent = Intent(
+            ContextCompat.startForegroundService(
                 context,
-                ConnectXStrategyEvaluationService::class.java,
-            ).apply {
-                action = TunnelContract.ACTION_START
-                putExtra(
-                    TunnelContract.EXTRA_ENGINE_MODE,
-                    TunnelContract.MODE_NATIVE_STRATEGY_EVALUATION,
-                )
-            }
-            ContextCompat.startForegroundService(context, startIntent)
+                strategyServiceIntent(context, TunnelContract.ACTION_START),
+            )
 
             val result = awaitTerminalStatus(statuses)
             val nativeTrace = NativeTunBridge.transportDiagnostics()
@@ -167,14 +160,44 @@ class StrategyEvaluationInstrumentedTest {
             )
             assertTrue(nativeTrace.contains("tcpFlows="))
             assertFalse(NativeTunBridge.isRunning())
-        } finally {
-            val stopIntent = Intent(
+
+            // A duplicated STOP after the completed service has already torn
+            // down must not convert LAB_APPROVED into a synthetic cooldown.
+            context.startService(
+                strategyServiceIntent(context, TunnelContract.ACTION_STOP),
+            )
+            assertEquals(
+                TunnelContract.STATUS_STOPPED,
+                awaitStatus(statuses, TunnelContract.STATUS_STOPPED)
+                    .getStringExtra(TunnelContract.EXTRA_STATUS),
+            )
+
+            // Immediate explicit re-evaluation must still be accepted. Stop it
+            // after STATUS_STARTED so this test also verifies active-stop cleanup.
+            ContextCompat.startForegroundService(
                 context,
-                ConnectXStrategyEvaluationService::class.java,
-            ).apply {
-                action = TunnelContract.ACTION_STOP
+                strategyServiceIntent(context, TunnelContract.ACTION_START),
+            )
+            assertEquals(
+                TunnelContract.STATUS_STARTED,
+                awaitStatus(statuses, TunnelContract.STATUS_STARTED)
+                    .getStringExtra(TunnelContract.EXTRA_STATUS),
+            )
+            context.startService(
+                strategyServiceIntent(context, TunnelContract.ACTION_STOP),
+            )
+            assertEquals(
+                TunnelContract.STATUS_STOPPED,
+                awaitStatus(statuses, TunnelContract.STATUS_STOPPED)
+                    .getStringExtra(TunnelContract.EXTRA_STATUS),
+            )
+            assertFalse(NativeTunBridge.isRunning())
+        } finally {
+            runCatching {
+                context.startService(
+                    strategyServiceIntent(context, TunnelContract.ACTION_STOP),
+                )
             }
-            runCatching { context.startService(stopIntent) }
             runCatching { context.unregisterReceiver(receiver) }
             instrumentation.runOnMainSync { activity?.finish() }
             shell("appops set $packageName ACTIVATE_VPN default")
@@ -197,6 +220,37 @@ class StrategyEvaluationInstrumentedTest {
         error("unreachable")
     }
 
+    private fun awaitStatus(
+        statuses: LinkedBlockingQueue<Intent>,
+        expectedStatus: String,
+    ): Intent {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(STATUS_TIMEOUT_SECONDS)
+        while (System.nanoTime() < deadline) {
+            val remainingNanos = deadline - System.nanoTime()
+            val status = statuses.poll(remainingNanos, TimeUnit.NANOSECONDS)
+                ?: break
+            val actual = status.getStringExtra(TunnelContract.EXTRA_STATUS)
+            if (actual == expectedStatus) return status
+            if (actual == TunnelContract.STATUS_ERROR) {
+                fail(
+                    "Expected $expectedStatus but service failed: " +
+                        status.getStringExtra(TunnelContract.EXTRA_ERROR),
+                )
+            }
+        }
+        fail("Timed out waiting for strategy evaluation status $expectedStatus")
+        error("unreachable")
+    }
+
+    private fun strategyServiceIntent(context: Context, action: String): Intent =
+        Intent(context, ConnectXStrategyEvaluationService::class.java).apply {
+            this.action = action
+            putExtra(
+                TunnelContract.EXTRA_ENGINE_MODE,
+                TunnelContract.MODE_NATIVE_STRATEGY_EVALUATION,
+            )
+        }
+
     private fun shell(command: String): String {
         val descriptor = InstrumentationRegistry.getInstrumentation()
             .uiAutomation
@@ -213,5 +267,6 @@ class StrategyEvaluationInstrumentedTest {
         const val CLIENT_HELLO_BYTES = 44L
         const val EXPECTED_CONNECTIONS = 3L
         const val PROBE_TIMEOUT_SECONDS = 50L
+        const val STATUS_TIMEOUT_SECONDS = 15L
     }
 }
