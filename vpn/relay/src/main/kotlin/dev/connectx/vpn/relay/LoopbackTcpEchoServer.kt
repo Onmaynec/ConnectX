@@ -39,7 +39,7 @@ class LoopbackTcpEchoServer(
 
         val server = ServerSocket().apply {
             reuseAddress = true
-            bind(InetSocketAddress(InetAddress.getLoopbackAddress(), 0))
+            bind(InetSocketAddress(InetAddress.getByName(LOOPBACK_HOST), 0))
         }
         serverReference.set(server)
         listeningPort = server.localPort
@@ -125,6 +125,7 @@ class LoopbackTcpEchoServer(
         Thread({ block() }, name).apply { isDaemon = true }
 
     private companion object {
+        const val LOOPBACK_HOST = "127.0.0.1"
         const val DEFAULT_MAX_PAYLOAD_BYTES = 4 * 1024
         const val MAX_ALLOWED_PAYLOAD_BYTES = 64 * 1024
         const val DEFAULT_SOCKET_TIMEOUT_MILLIS = 5_000
