@@ -24,6 +24,7 @@ import dev.connectx.core.model.EngineMode
 import dev.connectx.vpn.api.TunnelContract
 import dev.connectx.vpn.nativebridge.NativeTunBridge
 import dev.connectx.vpn.service.ConnectXDnsProbeService
+import dev.connectx.vpn.service.ConnectXStrategyEvaluationService
 import dev.connectx.vpn.service.ConnectXTunnelService
 
 class MainActivity : ComponentActivity() {
@@ -197,6 +198,77 @@ class MainActivity : ComponentActivity() {
                     ),
                 )
 
+                TunnelContract.STATUS_STRATEGY_EVALUATION_COMPLETED -> dispatch(
+                    ConnectionEvent.StrategyEvaluationCompleted(
+                        strategyId = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_STRATEGY_ID,
+                        ).orEmpty(),
+                        segments = statusIntent.getIntExtra(
+                            TunnelContract.EXTRA_STRATEGY_SEGMENTS,
+                            0,
+                        ),
+                        splitOffset = statusIntent.getIntExtra(
+                            TunnelContract.EXTRA_STRATEGY_SPLIT_OFFSET,
+                            0,
+                        ),
+                        decision = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_STRATEGY_DECISION,
+                        ).orEmpty(),
+                        reason = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_STRATEGY_REASON,
+                        ).orEmpty(),
+                        baselineLatencyMillis = statusIntent.optionalNonNegativeLong(
+                            TunnelContract.EXTRA_STRATEGY_BASELINE_LATENCY_MILLIS,
+                        ),
+                        strategyLatencyMillis = statusIntent.optionalNonNegativeLong(
+                            TunnelContract.EXTRA_STRATEGY_LATENCY_MILLIS,
+                        ),
+                        recoveryLatencyMillis = statusIntent.optionalNonNegativeLong(
+                            TunnelContract.EXTRA_STRATEGY_RECOVERY_LATENCY_MILLIS,
+                        ),
+                        latencyDeltaMillis = statusIntent.optionalLong(
+                            TunnelContract.EXTRA_STRATEGY_LATENCY_DELTA_MILLIS,
+                            missingValue = Long.MIN_VALUE,
+                        ),
+                        allowedStrategyLatencyMillis = statusIntent.optionalNonNegativeLong(
+                            TunnelContract.EXTRA_STRATEGY_ALLOWED_LATENCY_MILLIS,
+                        ),
+                        baselineFailure = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_STRATEGY_BASELINE_FAILURE,
+                        ),
+                        strategyFailure = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_STRATEGY_PHASE_FAILURE,
+                        ),
+                        recoveryFailure = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_STRATEGY_RECOVERY_FAILURE,
+                        ),
+                        uploadedBytes = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_UPLOADED_BYTES,
+                            0L,
+                        ),
+                        downloadedBytes = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_DOWNLOADED_BYTES,
+                            0L,
+                        ),
+                        relayConnections = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_RELAY_CONNECTIONS,
+                            0L,
+                        ),
+                        gateState = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_STRATEGY_GATE_STATE,
+                        ).orEmpty(),
+                        cooldownUntilElapsedMillis = statusIntent.optionalNonNegativeLong(
+                            TunnelContract.EXTRA_STRATEGY_COOLDOWN_UNTIL_MILLIS,
+                        ),
+                        nativeVersion = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_NATIVE_VERSION,
+                        ),
+                        abi = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_NATIVE_ABI,
+                        ),
+                    ),
+                )
+
                 TunnelContract.STATUS_STOPPED -> dispatch(ConnectionEvent.TunnelStopped)
                 TunnelContract.STATUS_ERROR -> dispatch(
                     ConnectionEvent.Failed(
@@ -233,6 +305,9 @@ class MainActivity : ComponentActivity() {
                     },
                     onNativeTlsSplitProbe = {
                         requestTunnelPermission(EngineMode.NATIVE_TLS_SPLIT_PROBE)
+                    },
+                    onStrategyEvaluation = {
+                        requestTunnelPermission(EngineMode.NATIVE_STRATEGY_EVALUATION)
                     },
                 )
             }
@@ -273,11 +348,7 @@ class MainActivity : ComponentActivity() {
 
     private fun startTunnelService(mode: EngineMode) {
         runCatching {
-            val serviceClass = if (mode == EngineMode.NATIVE_DNS_PROBE) {
-                ConnectXDnsProbeService::class.java
-            } else {
-                ConnectXTunnelService::class.java
-            }
+            val serviceClass = mode.serviceClass()
             val serviceIntent = Intent(this, serviceClass).apply {
                 action = TunnelContract.ACTION_START
                 putExtra(TunnelContract.EXTRA_ENGINE_MODE, mode.toContractValue())
@@ -295,15 +366,17 @@ class MainActivity : ComponentActivity() {
     private fun stopTunnelService() {
         val activeMode = connectionState.value.mode
         dispatch(ConnectionEvent.StopRequested)
-        val serviceClass = if (activeMode == EngineMode.NATIVE_DNS_PROBE) {
-            ConnectXDnsProbeService::class.java
-        } else {
-            ConnectXTunnelService::class.java
-        }
-        val serviceIntent = Intent(this, serviceClass).apply {
+        val serviceIntent = Intent(this, activeMode.serviceClass()).apply {
             action = TunnelContract.ACTION_STOP
         }
         startService(serviceIntent)
+    }
+
+    private fun EngineMode.serviceClass(): Class<*> = when (this) {
+        EngineMode.NATIVE_DNS_PROBE -> ConnectXDnsProbeService::class.java
+        EngineMode.NATIVE_STRATEGY_EVALUATION ->
+            ConnectXStrategyEvaluationService::class.java
+        else -> ConnectXTunnelService::class.java
     }
 
     private fun inspectNativeBridge() {
@@ -365,6 +438,8 @@ private fun EngineMode.toContractValue(): String = when (this) {
     EngineMode.NATIVE_UDP_PROBE -> TunnelContract.MODE_NATIVE_UDP_PROBE
     EngineMode.NATIVE_DNS_PROBE -> TunnelContract.MODE_NATIVE_DNS_PROBE
     EngineMode.NATIVE_TLS_SPLIT_PROBE -> TunnelContract.MODE_NATIVE_TLS_SPLIT_PROBE
+    EngineMode.NATIVE_STRATEGY_EVALUATION ->
+        TunnelContract.MODE_NATIVE_STRATEGY_EVALUATION
 }
 
 private fun Intent.readEngineMode(): EngineMode = when (
@@ -375,5 +450,13 @@ private fun Intent.readEngineMode(): EngineMode = when (
     TunnelContract.MODE_NATIVE_UDP_PROBE -> EngineMode.NATIVE_UDP_PROBE
     TunnelContract.MODE_NATIVE_DNS_PROBE -> EngineMode.NATIVE_DNS_PROBE
     TunnelContract.MODE_NATIVE_TLS_SPLIT_PROBE -> EngineMode.NATIVE_TLS_SPLIT_PROBE
+    TunnelContract.MODE_NATIVE_STRATEGY_EVALUATION ->
+        EngineMode.NATIVE_STRATEGY_EVALUATION
     else -> EngineMode.FOUNDATION
 }
+
+private fun Intent.optionalNonNegativeLong(name: String): Long? =
+    getLongExtra(name, -1L).takeIf { it >= 0L }
+
+private fun Intent.optionalLong(name: String, missingValue: Long): Long? =
+    getLongExtra(name, missingValue).takeIf { it != missingValue }
