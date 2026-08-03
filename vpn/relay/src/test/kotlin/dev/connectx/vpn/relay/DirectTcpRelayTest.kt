@@ -20,12 +20,12 @@ class DirectTcpRelayTest {
         username = "connectx",
         password = "relay-test-secret",
     )
+    private val ipv4Loopback = InetAddress.getByName("127.0.0.1")
 
     @Test
     fun `relay protects outbound socket and forwards bytes directly`() {
-        val loopback = InetAddress.getLoopbackAddress()
         val echoServer = ServerSocket().apply {
-            bind(InetSocketAddress(loopback, 0))
+            bind(InetSocketAddress(ipv4Loopback, 0))
         }
         val echoThread = thread(
             start = true,
@@ -53,7 +53,7 @@ class DirectTcpRelayTest {
 
         try {
             val relayPort = relay.start()
-            Socket(loopback, relayPort).use { client ->
+            Socket(ipv4Loopback, relayPort).use { client ->
                 val input = DataInputStream(client.getInputStream())
                 val output = DataOutputStream(client.getOutputStream())
                 authenticate(input, output, credentials)
@@ -110,7 +110,7 @@ class DirectTcpRelayTest {
 
         try {
             val relayPort = relay.start()
-            Socket(InetAddress.getLoopbackAddress(), relayPort).use { client ->
+            Socket(ipv4Loopback, relayPort).use { client ->
                 val input = DataInputStream(client.getInputStream())
                 val output = DataOutputStream(client.getOutputStream())
                 authenticate(input, output, credentials)
@@ -158,7 +158,7 @@ class DirectTcpRelayTest {
 
         try {
             val relayPort = relay.start()
-            Socket(InetAddress.getLoopbackAddress(), relayPort).use { client ->
+            Socket(ipv4Loopback, relayPort).use { client ->
                 val input = DataInputStream(client.getInputStream())
                 val output = DataOutputStream(client.getOutputStream())
 
