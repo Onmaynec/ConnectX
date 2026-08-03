@@ -6,7 +6,7 @@ All notable changes to ConnectX are documented in this file.
 
 ### Planned
 
-- Bounded TEST-NET TUN probe that executes the TLS write-split plan.
+- Transport-level observation of actual TCP segment boundaries.
 - Physical-device repeated TUN lifecycle verification.
 - First strategy verified on a reproducible restricted network.
 
@@ -24,9 +24,16 @@ All notable changes to ConnectX are documented in this file.
 - Bounded TLS record and ClientHello inspector.
 - Deterministic two-write split plan after the ClientHello fixed prefix.
 - Lossless payload reconstruction helper with defensive segment copies.
+- Exact TEST-NET TLS lab target limited to `192.0.2.1:18443`.
+- Android foreground `VpnService` path: synthetic ClientHello → two ordered writes → TUN → gVisor/tun2socks → authenticated relay → loopback echo.
+- Protected relay connection to the process-local echo endpoint.
+- Manual Compose control labelled `TLS write-split (Lab)`.
+- Typed strategy diagnostics: strategy id, write count, split offset, latency, bytes and relay connections.
 - JVM unit tests for parser boundaries, feature gates, registry invariants and reconstruction.
-- Isolated Android instrumentation gate proving the same strategy code is packaged in the APK.
-- Version-aware Compose diagnostics showing that the lab strategy is available but disabled.
+- Reducer tests for strategy start, completion and scoped failure states.
+- Isolated Android instrumentation gate proving the planner is packaged and disabled by default.
+- Isolated Android instrumentation gate verifying the lossless two-write stream through the real TEST-NET TUN path.
+- Version-aware Compose diagnostics.
 - Application version `0.3.0-alpha.1`, versionCode `8`.
 
 ### Rejected inputs
@@ -40,19 +47,22 @@ All notable changes to ConnectX are documented in this file.
 - unsupported TLS record versions;
 - truncated records;
 - mismatched record or handshake lengths;
-- trailing data and payloads larger than the bounded lab limit.
+- trailing data and payloads larger than the bounded lab limit;
+- every strategy-lab target except `192.0.2.1:18443`.
 
 ### Safety boundaries
 
-- The strategy planner is not connected to ordinary device traffic.
-- The feature gate is disabled by default and the first strategy is lab-only.
-- Two socket writes are not claimed to equal two TCP packets on the wire.
-- Existing TUN capture remains limited to TEST-NET-1 (`192.0.2.0/24`).
+- The strategy is activated only by an explicit lab action and is not connected to ordinary device traffic.
+- The global feature gate remains disabled by default and the first strategy rejects `USER_TRAFFIC` scope.
+- Two socket writes are not claimed to equal two TCP segments or two IP packets on the wire.
+- TUN capture remains limited to TEST-NET-1 (`192.0.2.0/24`).
 - No default IPv4 or IPv6 route is added.
+- The strategy endpoint and authenticated relay bind only to `127.0.0.1` after exact target rewriting.
 - System DNS traffic is not intercepted and no external resolver is contacted.
-- TLS is not decrypted, modified semantically or intercepted with custom certificates.
+- TLS is not decrypted, semantically modified or intercepted with custom certificates.
 - Payloads, query names and SOCKS credentials are not logged.
 - No remote ConnectX server is used.
+- The unchanged native transport bridge keeps its `0.2.0-alpha.6` component version.
 - This release does not claim working censorship bypass.
 
 ## [0.2.0-alpha.6]
