@@ -19,6 +19,7 @@ import dev.connectx.vpn.nativebridge.NativeTunSession
 import dev.connectx.vpn.relay.DatagramSocketProtector
 import dev.connectx.vpn.relay.DirectTcpRelay
 import dev.connectx.vpn.relay.DnsProbeProtocol
+import dev.connectx.vpn.relay.DnsProbeServerStats
 import dev.connectx.vpn.relay.ExactUdpRelayTargetOverride
 import dev.connectx.vpn.relay.LoopbackDnsProbeServer
 import dev.connectx.vpn.relay.RelayStats
@@ -234,9 +235,7 @@ class ConnectXDnsProbeService : VpnService() {
                     uploadedBytes = query.size.toLong(),
                     downloadedBytes = response.length.toLong(),
                 )
-                val responderStats = checkNotNull(dnsResponder) {
-                    "DNS responder отсутствует во время probe"
-                }.stats()
+                val responderStats = awaitDnsResponderStats()
 
                 check(relayStats.udpAssociations >= 1L) {
                     "Relay не подтвердил authenticated DNS UDP association"
@@ -301,6 +300,23 @@ class ConnectXDnsProbeService : VpnService() {
         ) {
             Thread.sleep(STATS_POLL_MILLIS)
             stats = localRelay.stats()
+        }
+        return stats
+    }
+
+    private fun awaitDnsResponderStats(): DnsProbeServerStats {
+        val responder = checkNotNull(dnsResponder) {
+            "DNS responder отсутствует во время probe"
+        }
+        val deadline = SystemClock.elapsedRealtime() + STATS_TIMEOUT_MILLIS
+        var stats = responder.stats()
+        while (
+            stats.rejected == 0L &&
+            (stats.queries < 1L || stats.responses < 1L) &&
+            SystemClock.elapsedRealtime() < deadline
+        ) {
+            Thread.sleep(STATS_POLL_MILLIS)
+            stats = responder.stats()
         }
         return stats
     }
