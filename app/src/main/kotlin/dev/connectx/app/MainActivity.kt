@@ -58,6 +58,33 @@ class MainActivity : ComponentActivity() {
                     ),
                 )
 
+                TunnelContract.STATUS_PROBE_SUCCEEDED -> dispatch(
+                    ConnectionEvent.ProbeCompleted(
+                        latencyMillis = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_LATENCY_MILLIS,
+                            0L,
+                        ),
+                        uploadedBytes = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_UPLOADED_BYTES,
+                            0L,
+                        ),
+                        downloadedBytes = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_DOWNLOADED_BYTES,
+                            0L,
+                        ),
+                        relayConnections = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_RELAY_CONNECTIONS,
+                            0L,
+                        ),
+                        nativeVersion = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_NATIVE_VERSION,
+                        ),
+                        abi = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_NATIVE_ABI,
+                        ),
+                    ),
+                )
+
                 TunnelContract.STATUS_STOPPED -> dispatch(ConnectionEvent.TunnelStopped)
                 TunnelContract.STATUS_ERROR -> dispatch(
                     ConnectionEvent.Failed(
@@ -82,6 +109,9 @@ class MainActivity : ComponentActivity() {
                     onToggle = ::toggleTunnel,
                     onNativeSelfTest = {
                         requestTunnelPermission(EngineMode.NATIVE_SELF_TEST)
+                    },
+                    onNativeTcpProbe = {
+                        requestTunnelPermission(EngineMode.NATIVE_TCP_PROBE)
                     },
                 )
             }
@@ -199,11 +229,13 @@ class MainActivity : ComponentActivity() {
 private fun EngineMode.toContractValue(): String = when (this) {
     EngineMode.FOUNDATION -> TunnelContract.MODE_FOUNDATION
     EngineMode.NATIVE_SELF_TEST -> TunnelContract.MODE_NATIVE_SELF_TEST
+    EngineMode.NATIVE_TCP_PROBE -> TunnelContract.MODE_NATIVE_TCP_PROBE
 }
 
 private fun Intent.readEngineMode(): EngineMode = when (
     getStringExtra(TunnelContract.EXTRA_ENGINE_MODE)
 ) {
     TunnelContract.MODE_NATIVE_SELF_TEST -> EngineMode.NATIVE_SELF_TEST
+    TunnelContract.MODE_NATIVE_TCP_PROBE -> EngineMode.NATIVE_TCP_PROBE
     else -> EngineMode.FOUNDATION
 }
