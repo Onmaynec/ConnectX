@@ -28,9 +28,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.connectx.app.BuildConfig
 import dev.connectx.core.model.ConnectionState
 import dev.connectx.core.model.ConnectionUiState
 import dev.connectx.core.model.EngineMode
+import dev.connectx.strategy.api.TlsClientHelloSplitStrategy
+
+private val labStrategyDescriptor = TlsClientHelloSplitStrategy().descriptor
 
 @Composable
 fun HomeScreen(
@@ -122,7 +126,7 @@ fun HomeScreen(
                 Box(modifier = Modifier.padding(20.dp)) {
                     Column {
                         Text(
-                            text = "Native diagnostics · v0.2.0-a6",
+                            text = "Native diagnostics · v${BuildConfig.VERSION_NAME}",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -310,13 +314,17 @@ private fun diagnosticsText(uiState: ConnectionUiState): String {
         null -> emptyList()
     }
 
-    val safety = "Диагностика использует только 192.0.2.0/24; системный DNS и обычный интернет-трафик не перехватываются."
+    val strategy =
+        "Strategy lab: ${labStrategyDescriptor.id} · доступна в APK · выключена по умолчанию"
+    val safety =
+        "Диагностика использует только 192.0.2.0/24; системный DNS и обычный интернет-трафик не перехватываются."
     return (
         listOf(availability) +
             nativeDetails +
             tcpProbeDetails +
             udpProbeDetails +
             dnsProbeDetails +
+            strategy +
             safety
         )
         .filter { it.isNotBlank() }
