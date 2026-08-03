@@ -75,6 +75,31 @@ class StrategyHealthEvaluatorTest {
     }
 
     @Test
+    fun baselineFailureKeepsPriorityWhenRecoveryAlsoFails() {
+        val report = evaluator().evaluate(
+            strategyId = strategyId,
+            baselineSamples = listOf(
+                StrategyHealthSample.Failure(StrategySampleFailure.CONNECTION_FAILED),
+            ),
+            strategySamples = listOf(
+                StrategyHealthSample.Failure(StrategySampleFailure.TIMEOUT),
+            ),
+            recoverySamples = listOf(
+                StrategyHealthSample.Failure(StrategySampleFailure.PAYLOAD_MISMATCH),
+            ),
+        )
+
+        assertEquals(
+            StrategyEvaluationDecision.REJECT_BASELINE_UNHEALTHY,
+            report.decision,
+        )
+        assertEquals(
+            StrategyEvaluationReason.BASELINE_FAILURE_BUDGET_EXCEEDED,
+            report.reason,
+        )
+    }
+
+    @Test
     fun failedRecoveryMarksEnvironmentUnstable() {
         val report = evaluator().evaluate(
             strategyId = strategyId,
@@ -82,6 +107,29 @@ class StrategyHealthEvaluatorTest {
             strategySamples = successes(20L),
             recoverySamples = listOf(
                 StrategyHealthSample.Failure(StrategySampleFailure.PAYLOAD_MISMATCH),
+            ),
+        )
+
+        assertEquals(
+            StrategyEvaluationDecision.REJECT_ENVIRONMENT_UNSTABLE,
+            report.decision,
+        )
+        assertEquals(
+            StrategyEvaluationReason.RECOVERY_FAILURE_BUDGET_EXCEEDED,
+            report.reason,
+        )
+    }
+
+    @Test
+    fun recoveryFailureOutranksStrategyFailure() {
+        val report = evaluator().evaluate(
+            strategyId = strategyId,
+            baselineSamples = successes(20L),
+            strategySamples = listOf(
+                StrategyHealthSample.Failure(StrategySampleFailure.TIMEOUT),
+            ),
+            recoverySamples = listOf(
+                StrategyHealthSample.Failure(StrategySampleFailure.CONNECTION_FAILED),
             ),
         )
 
@@ -218,6 +266,22 @@ class StrategyHealthEvaluatorTest {
         assertEquals(StrategyEvaluationDecision.INCONCLUSIVE, aborted.lastDecision)
         assertThrows(IllegalStateException::class.java) { aborted.begin(6_999L) }
         assertEquals(StrategySessionGateState.EVALUATING, aborted.begin(7_000L).state)
+    }
+
+    @Test
+    fun cooldownDeadlineSaturatesInsteadOfWrapping() {
+        val policy = StrategyEvaluationPolicy(cooldownMillis = 5_000L)
+        val aborted = StrategySessionGate()
+            .begin(Long.MAX_VALUE - 1_000L)
+            .abort(
+                nowElapsedMillis = Long.MAX_VALUE - 500L,
+                policy = policy,
+            )
+
+        assertEquals(StrategySessionGateState.COOLDOWN, aborted.state)
+        assertEquals(Long.MAX_VALUE, aborted.cooldownUntilElapsedMillis)
+        assertEquals(StrategySessionGateState.COOLDOWN, aborted.refresh(Long.MAX_VALUE - 1L).state)
+        assertEquals(StrategySessionGateState.READY, aborted.refresh(Long.MAX_VALUE).state)
     }
 
     @Test
