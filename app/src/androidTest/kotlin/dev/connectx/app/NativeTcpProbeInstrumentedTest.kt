@@ -97,7 +97,6 @@ class NativeTcpProbeInstrumentedTest {
                 action = TunnelContract.ACTION_STOP
             }
             runCatching { context.startService(stopIntent) }
-            runCatching { NativeTunBridge.stop() }
             runCatching { context.unregisterReceiver(receiver) }
             shell("appops set $packageName ACTIVATE_VPN default")
         }
