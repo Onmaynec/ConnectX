@@ -1,0 +1,1 @@
+Publish v0.3.0-alpha.2 only after the exact main commit passes the guarded JVM, lint, APK, native and Android runtime gates defined in .github/workflows/release-v0.3.0-alpha2.yml.
