@@ -64,7 +64,7 @@ var (
 )
 
 func Version() string {
-	return "connectx-go-bridge/0.2.0-alpha.5 upstream/" + upstreamCommit
+	return "connectx-go-bridge/0.2.0-alpha.6 upstream/" + upstreamCommit
 }
 
 // TransportDiagnostics is deliberately payload-free and exposes only the
