@@ -1,0 +1,17 @@
+name: Hosted Runner Probe
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu-22-probe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 2
+    steps:
+      - name: Confirm runner allocation
+        run: |
+          echo "runner=${RUNNER_OS}"
+          uname -a
