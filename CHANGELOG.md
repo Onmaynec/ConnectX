@@ -10,6 +10,30 @@ All notable changes to ConnectX are documented in this file.
 - Direct UDP and DNS passthrough.
 - First verified DPI-obfuscation strategy.
 
+## [0.2.0-alpha.4]
+
+### Added
+
+- Explicit `Native TCP probe` mode in the existing diagnostics card.
+- End-to-end Android path: application socket → TEST-NET TUN → gVisor/tun2socks → authenticated relay → loopback echo endpoint.
+- Exact relay target override limited to `192.0.2.1:18080`.
+- Random 64-byte nonce echo verification.
+- Probe latency, uploaded/downloaded byte counters and relay connection count in UI state and broadcasts.
+- Automatic probe teardown after success, failure, stop or VPN revoke.
+- Full Android instrumentation gate that prepares `VpnService`, starts the foreground service and verifies the real TCP path.
+- Deterministic IPv4 loopback binding for the native SOCKS endpoint and probe echo endpoint.
+- Native shutdown order aligned with upstream tun2socks: fd-backed device closes before gVisor stack wait.
+
+### Safety boundaries
+
+- TUN capture remains limited to TEST-NET-1 (`192.0.2.0/24`).
+- No default IPv4 or IPv6 routes are added.
+- The relay rewrite applies to one exact reserved diagnostic endpoint only.
+- The echo endpoint and authenticated relay bind only to `127.0.0.1`.
+- DNS, UDP, IPv6, QUIC and DPI obfuscation remain disabled.
+- No remote ConnectX server, HTTPS interception, certificate installation or traffic-content logging is used.
+- This release does not claim working censorship bypass.
+
 ## [0.2.0-alpha.3]
 
 ### Added
