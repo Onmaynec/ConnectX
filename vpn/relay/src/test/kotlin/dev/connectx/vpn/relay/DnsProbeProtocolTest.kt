@@ -31,15 +31,15 @@ class DnsProbeProtocolTest {
     fun `query parser rejects compression multiple questions and trailing bytes`() {
         val compressed = DnsProbeProtocol.buildQuery(1).also { packet ->
             packet[12] = 0xC0.toByte()
-            packet[13] = 0x0C
+            packet[13] = 0x0C.toByte()
         }
         assertThrows(IllegalArgumentException::class.java) {
             DnsProbeProtocol.parseQuery(compressed)
         }
 
         val multipleQuestions = DnsProbeProtocol.buildQuery(2).also { packet ->
-            packet[4] = 0
-            packet[5] = 2
+            packet[4] = 0.toByte()
+            packet[5] = 2.toByte()
         }
         assertThrows(IllegalArgumentException::class.java) {
             DnsProbeProtocol.parseQuery(multipleQuestions)
@@ -61,7 +61,7 @@ class DnsProbeProtocolTest {
         }
 
         val altered = response.copyOf().also { packet ->
-            packet[packet.lastIndex] = 43
+            packet[packet.lastIndex] = 43.toByte()
         }
         assertThrows(IllegalArgumentException::class.java) {
             DnsProbeProtocol.parseResponse(altered, 0x1234)
