@@ -37,6 +37,7 @@ fun HomeScreen(
     uiState: ConnectionUiState,
     onToggle: () -> Unit,
     onNativeSelfTest: () -> Unit,
+    onNativeTcpProbe: () -> Unit,
 ) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -119,7 +120,7 @@ fun HomeScreen(
                 Box(modifier = Modifier.padding(20.dp)) {
                     Column {
                         Text(
-                            text = "Native self-test · v0.2.0-a3",
+                            text = "Native diagnostics · v0.2.0-a4",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -132,11 +133,7 @@ fun HomeScreen(
                         Spacer(modifier = Modifier.height(12.dp))
                         OutlinedButton(
                             onClick = onNativeSelfTest,
-                            enabled = uiState.diagnostics.available == true &&
-                                uiState.state in setOf(
-                                    ConnectionState.OFF,
-                                    ConnectionState.ERROR,
-                                ),
+                            enabled = diagnosticsActionEnabled(uiState),
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(
@@ -148,6 +145,21 @@ fun HomeScreen(
                                 textAlign = TextAlign.Center,
                             )
                         }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onNativeTcpProbe,
+                            enabled = diagnosticsActionEnabled(uiState),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = if (uiState.probe.running) {
+                                    "TCP probe выполняется"
+                                } else {
+                                    "Проверить TCP-путь через TUN"
+                                },
+                                textAlign = TextAlign.Center,
+                            )
+                        }
                     }
                 }
             }
@@ -155,19 +167,23 @@ fun HomeScreen(
     }
 }
 
+private fun diagnosticsActionEnabled(uiState: ConnectionUiState): Boolean =
+    uiState.diagnostics.available == true &&
+        uiState.state in setOf(ConnectionState.OFF, ConnectionState.ERROR)
+
 private fun statusTitle(uiState: ConnectionUiState): String = when (uiState.state) {
     ConnectionState.OFF -> "Выключено"
     ConnectionState.PERMISSION_REQUIRED -> "Нужно системное разрешение"
-    ConnectionState.STARTING -> if (uiState.mode == EngineMode.NATIVE_SELF_TEST) {
-        "Запуск native self-test"
-    } else {
-        "Запуск TCP-ядра"
+    ConnectionState.STARTING -> when (uiState.mode) {
+        EngineMode.NATIVE_SELF_TEST -> "Запуск native self-test"
+        EngineMode.NATIVE_TCP_PROBE -> "Подготовка TCP probe"
+        EngineMode.FOUNDATION -> "Запуск TCP-ядра"
     }
 
-    ConnectionState.LOCAL_TUN_ACTIVE -> if (uiState.mode == EngineMode.NATIVE_SELF_TEST) {
-        "Native self-test активен"
-    } else {
-        "TCP-ядро готово"
+    ConnectionState.LOCAL_TUN_ACTIVE -> when (uiState.mode) {
+        EngineMode.NATIVE_SELF_TEST -> "Native self-test активен"
+        EngineMode.NATIVE_TCP_PROBE -> "TCP-пакет проходит через TUN"
+        EngineMode.FOUNDATION -> "TCP-ядро готово"
     }
 
     ConnectionState.STOPPING -> "Остановка"
@@ -193,14 +209,31 @@ private fun diagnosticsText(uiState: ConnectionUiState): String {
         false -> "Библиотека недоступна"
         null -> "Библиотека ещё не проверена"
     }
-    val details = listOfNotNull(
+    val nativeDetails = listOfNotNull(
         diagnostics.version?.let { "Версия: $it" },
         diagnostics.abi?.let { "ABI: $it" },
         diagnostics.lastResult,
-    ).joinToString(separator = "\n")
+    )
+    val probeDetails = when (uiState.probe.lastSuccess) {
+        true -> listOfNotNull(
+            uiState.probe.latencyMillis?.let { "TCP probe: ${it} мс" },
+            if (
+                uiState.probe.uploadedBytes != null &&
+                uiState.probe.downloadedBytes != null
+            ) {
+                "Relay: ↑${uiState.probe.uploadedBytes} Б · ↓${uiState.probe.downloadedBytes} Б"
+            } else {
+                null
+            },
+            uiState.probe.relayConnections?.let { "Соединения relay: $it" },
+        )
 
-    val safety = "Self-test использует только 192.0.2.0/24 и не перехватывает обычный интернет-трафик."
-    return listOf(availability, details, safety)
+        false -> listOfNotNull(uiState.probe.error?.let { "TCP probe: $it" })
+        null -> emptyList()
+    }
+
+    val safety = "Диагностика использует только 192.0.2.0/24 и не перехватывает обычный интернет-трафик."
+    return (listOf(availability) + nativeDetails + probeDetails + safety)
         .filter { it.isNotBlank() }
         .joinToString(separator = "\n")
 }
