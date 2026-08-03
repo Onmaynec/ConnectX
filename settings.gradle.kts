@@ -20,6 +20,7 @@ include(
     ":app",
     ":core:model",
     ":core:designsystem",
+    ":strategy:api",
     ":vpn:api",
     ":vpn:nativebridge",
     ":vpn:relay",
