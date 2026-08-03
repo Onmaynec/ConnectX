@@ -74,8 +74,11 @@ class NativeUdpProbeInstrumentedTest {
 
             val result = awaitTerminalStatus(statuses)
             val trace = UdpProbeTrace.snapshot()
+            val nativeFlowTrace = NativeTunBridge.transportDiagnostics()
             val failure = buildString {
                 append(result.getStringExtra(TunnelContract.EXTRA_ERROR))
+                append("; nativeTrace=")
+                append(nativeFlowTrace)
                 append("; udpTrace=")
                 append(trace)
             }
@@ -111,9 +114,13 @@ class NativeUdpProbeInstrumentedTest {
             assertTrue(
                 result.getLongExtra(TunnelContract.EXTRA_PROBE_DATAGRAMS, 0L) >= 1L,
             )
+            assertTrue(trace.associateRequests >= 1L)
+            assertTrue(trace.associationsReady >= 1L)
+            assertTrue(trace.relayPacketsReceived >= 1L)
             assertTrue(trace.resolvedDatagrams >= 1L)
             assertTrue(trace.echoReceives >= 1L)
             assertTrue(trace.echoSends >= 1L)
+            assertTrue(nativeFlowTrace.contains("udpFlows="))
             assertFalse(NativeTunBridge.isRunning())
         } finally {
             val stopIntent = Intent(context, ConnectXTunnelService::class.java).apply {
