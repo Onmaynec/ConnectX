@@ -1,41 +1,46 @@
 # ConnectX
 
-ConnectX — Android-приложение для локальной обработки и обфускации сетевого трафика с целью повышения устойчивости соединений к DPI-фильтрации.
+ConnectX — Android-приложение для локальной обработки сетевого трафика с целью повышения устойчивости соединений к DPI-фильтрации.
 
 ## Важное отличие от удалённого VPN
 
 ConnectX не является сервисом удалённого VPN и не перенаправляет пользовательский трафик через сервер разработчика.
 
-На Android без root системный `VpnService` используется только как разрешённый ОС механизм создания локального TUN-интерфейса. После появления проверенного packet engine исходящие соединения должны открываться напрямую к реальным серверам назначения через сокеты, исключённые из TUN методом `VpnService.protect()`.
+На Android без root системный `VpnService` используется только как разрешённый ОС механизм создания локального TUN-интерфейса. Исходящие relay-соединения открываются напрямую через сокеты, исключённые из TUN методом `VpnService.protect()`.
 
-ConnectX не выполняет MITM, не расшифровывает HTTPS, не устанавливает пользовательские сертификаты и не читает содержимое переписки.
+ConnectX не выполняет MITM, не расшифровывает HTTPS, не устанавливает пользовательские сертификаты и не записывает содержимое трафика.
 
-## Текущая версия: v0.1.0 Foundation
+## Текущая версия: v0.2.0-alpha.4
 
-В разработке находится первая preview-версия. Она проверяет:
+Alpha.4 добавляет ограниченный end-to-end TCP probe. По явному действию пользователя приложение проверяет путь:
 
-- Android 10+;
-- Compose UI;
-- системный запрос разрешения `VpnService`;
-- foreground service и уведомление;
-- безопасное создание, повторный запуск и закрытие локального TUN;
-- передачу статуса из сервиса в UI;
-- CI, unit tests, lint и сборку debug APK.
+```text
+Android socket
+  → TEST-NET TUN
+  → Go/gVisor + tun2socks
+  → authenticated local SOCKS5 relay
+  → loopback echo endpoint
+```
+
+Probe отправляет случайный 64-байтовый nonce, проверяет точный echo-ответ и показывает задержку, число переданных байтов и relay-соединений. После успеха, ошибки, остановки или отзыва VPN-разрешения все ресурсы автоматически закрываются.
 
 ### Важное ограничение
 
-Foundation перехватывает только зарезервированную тестовую сеть `192.0.2.0/24`. Обычный интернет-трафик телефона не направляется в незавершённый TUN.
+TUN по-прежнему перехватывает только зарезервированную сеть `192.0.2.0/24`. Диагностический relay override действует только для `192.0.2.1:18080` и перенаправляет его на process-local endpoint `127.0.0.1`.
 
-**DPI-обфускация и полноценный passthrough в v0.1.0 ещё не реализованы.**
+`0.0.0.0/0` и `::/0` не добавляются. Обычный интернет-трафик телефона не направляется в ConnectX. DNS, UDP, IPv6, QUIC и DPI-обфускация пока не реализованы, поэтому рабочий обход блокировок этой версией не заявляется.
 
 ## Модули
 
 ```text
-:app                 Compose UI и Android entry point
-:core:model          состояния и reducer
+:app                 Compose UI, permission flow и Android instrumentation probe
+:core:model          состояния, diagnostics и reducer
 :core:designsystem   Material 3 theme
-:vpn:api              межмодульный контракт tunnel lifecycle
-:vpn:service          Android VpnService и безопасный TUN lifecycle
+:vpn:api             межмодульный контракт tunnel lifecycle
+:vpn:relay           authenticated SOCKS5 relay и bounded echo endpoint
+:vpn:nativebridge    JNI API и Android native payload
+:vpn:service         VpnService, TUN, native/probe lifecycle
+engine/go            source-built tun2socks/gVisor bridge
 ```
 
 ## Сборка
@@ -43,7 +48,9 @@ Foundation перехватывает только зарезервирован�
 Требования:
 
 - JDK 17;
+- Go 1.26.3;
 - Android SDK 36;
+- Android NDK `28.0.13004108`;
 - Gradle 8.13.
 
 ```bash
@@ -52,17 +59,23 @@ gradle --no-daemon lintDebug
 gradle --no-daemon :app:assembleDebug
 ```
 
+Native bridge собирается скриптом:
+
+```bash
+engine/go/build-android.sh "$ANDROID_SDK_ROOT/ndk/28.0.13004108"
+```
+
 APK будет находиться в:
 
 ```text
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
-GitHub Actions выполняет те же проверки и сохраняет APK как workflow artifact.
+GitHub Actions дополнительно запускает Android 35 x86_64 emulator, загружает реальную `.so`, выполняет JNI smoke-test и полный `VpnService` TCP probe.
 
 ## Roadmap
 
-Полный план версий v0.1.0–v1.0.0 находится в [`ROADMAP.md`](ROADMAP.md). Технические исследования и архитектурные решения находятся в каталоге [`docs/`](docs/).
+Полный план версий находится в [`ROADMAP.md`](ROADMAP.md). Технические исследования, ADR и release notes находятся в каталоге [`docs/`](docs/).
 
 ## Безопасность и приватность
 
@@ -72,8 +85,9 @@ GitHub Actions выполняет те же проверки и сохраняе
 - нет расшифровки HTTPS;
 - нет установки сертификатов;
 - нет записи содержимого пакетов;
+- SOCKS credentials создаются временно и не выводятся в diagnostics;
 - root не является обязательным.
 
 ## Статус релиза
 
-Тег `v0.1.0` и GitHub Release создаются только после успешного CI на точном commit SHA и установки APK хотя бы на одном физическом устройстве Android 10+.
+Тег `v0.2.0-alpha.4` и GitHub prerelease создаются только после успешной проверки Go lock, unit tests, lint, APK payload и полного Android runtime probe на точном merge commit.
