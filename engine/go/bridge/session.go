@@ -43,7 +43,7 @@ var (
 )
 
 func Version() string {
-	return "connectx-go-bridge/0.2.0-alpha.3 upstream/" + upstreamCommit
+	return "connectx-go-bridge/0.2.0-alpha.4 upstream/" + upstreamCommit
 }
 
 // Start creates a userspace TCP/IP stack connected to an authenticated local
