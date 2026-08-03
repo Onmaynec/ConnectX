@@ -22,11 +22,13 @@ import java.util.concurrent.atomic.AtomicReference
  * Authenticated local SOCKS5 CONNECT endpoint that opens direct protected TCP sockets.
  *
  * This class never connects to a ConnectX server. It is an internal bridge
- * between a future tun2socks instance and the real destination socket.
+ * between tun2socks and the real destination socket. An optional target
+ * resolver is applied only after successful local SOCKS authentication.
  */
 class DirectTcpRelay(
     private val socketProtector: SocketProtector,
     private val credentials: Socks5Credentials,
+    private val targetResolver: RelayTargetResolver = RelayTargetResolver.IDENTITY,
     private val connectTimeoutMillis: Int = DEFAULT_CONNECT_TIMEOUT_MILLIS,
     maxConcurrentConnections: Int = DEFAULT_MAX_CONNECTIONS,
 ) : AutoCloseable {
@@ -148,6 +150,11 @@ class DirectTcpRelay(
             )
             val request = Socks5Protocol.readConnectRequest(input)
             requestAccepted = true
+            val target = try {
+                targetResolver.resolve(request.host, request.port)
+            } catch (error: RuntimeException) {
+                throw IOException("Relay target resolver rejected the request", error)
+            }
 
             val outbound = Socket()
             activeSockets += outbound
@@ -158,7 +165,7 @@ class DirectTcpRelay(
                 }
 
                 outbound.connect(
-                    InetSocketAddress(request.host, request.port),
+                    InetSocketAddress(target.host, target.port),
                     connectTimeoutMillis,
                 )
 
