@@ -34,4 +34,5 @@ data class RelayStats(
     val udpDatagrams: Long = 0L,
     val udpUploadedBytes: Long = 0L,
     val udpDownloadedBytes: Long = 0L,
+    val lastUdpError: String? = null,
 )
