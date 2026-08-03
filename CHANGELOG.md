@@ -7,8 +7,41 @@ All notable changes to ConnectX are documented in this file.
 ### Planned
 
 - Physical-device repeated TUN lifecycle verification.
-- Direct UDP and DNS passthrough.
+- Bounded DNS query path probe.
 - First verified DPI-obfuscation strategy.
+
+## [0.2.0-alpha.5]
+
+### Added
+
+- Explicit `Native UDP probe` mode in the diagnostics card.
+- End-to-end Android path: IPv4 datagram socket → TEST-NET TUN → gVisor/tun2socks → authenticated SOCKS5 UDP relay → loopback echo endpoint.
+- Exact UDP target override limited to `192.0.2.1:18081`.
+- Protected outbound relay datagram socket through `VpnService.protect()`.
+- Random 64-byte nonce echo verification.
+- Probe latency, uploaded/downloaded byte counters, UDP association count and datagram count in UI state and broadcasts.
+- SOCKS5 UDP framing with `FRAG != 0` rejection.
+- Generation-safe teardown after success, failure, stop or VPN revoke.
+- JVM end-to-end tests for authenticated UDP ASSOCIATE and loopback echo.
+- Android instrumentation gate that verifies both real TCP and UDP paths through foreground `VpnService`.
+- Native TCP/UDP flow counters for payload-free runtime diagnostics.
+
+### Fixed
+
+- The UDP probe now binds explicitly to IPv4 wildcard `0.0.0.0` instead of a potentially IPv6 dual-stack wildcard.
+- A bounded VPN-route settle and at most three fresh-socket attempts prevent the first one-shot UDP datagram from escaping before the TEST-NET route is active.
+- Relay diagnostics now distinguish association, framing, resolver and echo stages without logging payloads, target data or credentials.
+
+### Safety boundaries
+
+- TUN capture remains limited to TEST-NET-1 (`192.0.2.0/24`).
+- No default IPv4 or IPv6 routes are added.
+- UDP ASSOCIATE is available only in the explicit diagnostic mode.
+- Only the exact reserved endpoint `192.0.2.1:18081` is accepted.
+- The relay and echo endpoint bind only to `127.0.0.1`.
+- DNS, IPv6, QUIC and DPI obfuscation remain disabled.
+- No remote ConnectX server, HTTPS interception, certificate installation or traffic-content logging is used.
+- This release does not claim working censorship bypass.
 
 ## [0.2.0-alpha.4]
 
