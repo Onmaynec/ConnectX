@@ -6,11 +6,13 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"golang.org/x/sys/unix"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 
 	"github.com/xjasonlyu/tun2socks/v2/core"
+	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
 	"github.com/xjasonlyu/tun2socks/v2/core/device/fdbased"
 	"github.com/xjasonlyu/tun2socks/v2/proxy/socks5"
@@ -29,12 +31,31 @@ const (
 
 var upstreamCommit = "unknown"
 
+var (
+	tcpFlowCount atomic.Uint64
+	udpFlowCount atomic.Uint64
+)
+
 // Session owns the duplicated Android TUN file descriptor passed to Start.
 // The caller must not close that integer after ownership has been transferred.
 type Session struct {
 	device device.Device
 	stack  *stack.Stack
 	tunnel *tunnel.Tunnel
+}
+
+type countingTransportHandler struct {
+	delegate adapter.TransportHandler
+}
+
+func (h *countingTransportHandler) HandleTCP(conn adapter.TCPConn) {
+	tcpFlowCount.Add(1)
+	h.delegate.HandleTCP(conn)
+}
+
+func (h *countingTransportHandler) HandleUDP(conn adapter.UDPConn) {
+	udpFlowCount.Add(1)
+	h.delegate.HandleUDP(conn)
 }
 
 var (
@@ -44,6 +65,16 @@ var (
 
 func Version() string {
 	return "connectx-go-bridge/0.2.0-alpha.5 upstream/" + upstreamCommit
+}
+
+// TransportDiagnostics is deliberately payload-free and exposes only the
+// number of TCP/UDP flows delivered by gVisor to the transport handler.
+func TransportDiagnostics() string {
+	return fmt.Sprintf(
+		"tcpFlows=%d,udpFlows=%d",
+		tcpFlowCount.Load(),
+		udpFlowCount.Load(),
+	)
 }
 
 // Start creates a userspace TCP/IP stack connected to an authenticated local
@@ -104,14 +135,17 @@ func Start(
 	}
 	fdOwnedByBridge = true
 
+	tcpFlowCount.Store(0)
+	udpFlowCount.Store(0)
 	manager := statistic.DefaultManager
 	manager.ResetStatistic()
 	transport := tunnel.New(proxy, manager)
 	transport.ProcessAsync()
+	countingHandler := &countingTransportHandler{delegate: transport}
 
 	netstack, err := core.CreateStack(&core.Config{
 		LinkEndpoint:     dev,
-		TransportHandler: transport,
+		TransportHandler: countingHandler,
 	})
 	if err != nil {
 		transport.Close()
