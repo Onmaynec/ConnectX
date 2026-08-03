@@ -307,6 +307,18 @@ data class StrategySessionGate(
     val cooldownUntilElapsedMillis: Long? = null,
     val lastDecision: StrategyEvaluationDecision? = null,
 ) {
+    init {
+        require(
+            (state == StrategySessionGateState.COOLDOWN) ==
+                (cooldownUntilElapsedMillis != null),
+        ) {
+            "Only COOLDOWN state may carry a cooldown deadline"
+        }
+        require(cooldownUntilElapsedMillis == null || cooldownUntilElapsedMillis >= 0L) {
+            "Cooldown deadline must not be negative"
+        }
+    }
+
     fun refresh(nowElapsedMillis: Long): StrategySessionGate {
         require(nowElapsedMillis >= 0L) { "Elapsed time must not be negative" }
         return if (
@@ -322,12 +334,20 @@ data class StrategySessionGate(
         }
     }
 
+    /** A new explicit user action may re-evaluate a previously approved lab session. */
     fun begin(nowElapsedMillis: Long): StrategySessionGate {
         val refreshed = refresh(nowElapsedMillis)
-        check(refreshed.state == StrategySessionGateState.READY) {
+        check(
+            refreshed.state == StrategySessionGateState.READY ||
+                refreshed.state == StrategySessionGateState.LAB_APPROVED,
+        ) {
             "Strategy evaluation cannot start from ${refreshed.state}"
         }
-        return refreshed.copy(state = StrategySessionGateState.EVALUATING)
+        return refreshed.copy(
+            state = StrategySessionGateState.EVALUATING,
+            cooldownUntilElapsedMillis = null,
+            lastDecision = null,
+        )
     }
 
     fun complete(
@@ -355,6 +375,24 @@ data class StrategySessionGate(
                 lastDecision = report.decision,
             )
         }
+    }
+
+    fun abort(
+        nowElapsedMillis: Long,
+        policy: StrategyEvaluationPolicy = StrategyEvaluationPolicy(),
+    ): StrategySessionGate {
+        require(nowElapsedMillis >= 0L) { "Elapsed time must not be negative" }
+        check(state == StrategySessionGateState.EVALUATING) {
+            "Strategy evaluation can only abort from EVALUATING"
+        }
+        return copy(
+            state = StrategySessionGateState.COOLDOWN,
+            cooldownUntilElapsedMillis = saturatingDeadline(
+                nowElapsedMillis,
+                policy.cooldownMillis,
+            ),
+            lastDecision = StrategyEvaluationDecision.INCONCLUSIVE,
+        )
     }
 
     fun resetApprovedSession(): StrategySessionGate {
