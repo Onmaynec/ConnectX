@@ -215,7 +215,7 @@ jobs:
           "$ADB" shell getprop ro.product.cpu.abi
           "$ADB" shell getprop ro.build.version.sdk
 
-      - name: Run isolated JNI, TCP, UDP and DNS VpnService gates
+      - name: Run isolated strategy, JNI, TCP, UDP and DNS gates
         shell: bash
         run: |
           set -euo pipefail
@@ -262,6 +262,10 @@ jobs:
               exit "$status"
             fi
           }
+
+          run_app_gate \
+            strategy \
+            dev.connectx.app.StrategyFoundationInstrumentedTest
 
           gradle --no-daemon :vpn:nativebridge:connectedDebugAndroidTest
           reset_vpn_process
