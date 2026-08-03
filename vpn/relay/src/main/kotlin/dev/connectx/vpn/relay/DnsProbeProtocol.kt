@@ -18,7 +18,8 @@ object DnsProbeProtocol {
     private const val TYPE_A = 1
     private const val CLASS_IN = 1
     private const val QUERY_FLAGS = 0x0100
-    private const val RESPONSE_FLAGS = 0x8180
+    // QR + AA + copied RD. RA stays clear because this responder never recurses.
+    private const val RESPONSE_FLAGS = 0x8500
     private const val RESPONSE_TTL_SECONDS = 60L
     private const val QUESTION_OFFSET = HEADER_BYTES
     private const val ANSWER_NAME_POINTER = 0xC00C
