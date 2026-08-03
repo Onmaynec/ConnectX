@@ -223,6 +223,35 @@ class StrategyHealthEvaluatorTest {
     }
 
     @Test
+    fun phaseSummaryRejectsInconsistentFailureCounts() {
+        assertThrows(IllegalArgumentException::class.java) {
+            StrategyPhaseSummary(
+                phase = StrategyHealthPhase.BASELINE,
+                successes = 1,
+                failures = 1,
+                medianLatencyMillis = 10L,
+                failureReasons = emptyMap(),
+            )
+        }
+    }
+
+    @Test
+    fun reportRejectsForgedKeepDecision() {
+        assertThrows(IllegalArgumentException::class.java) {
+            StrategyEvaluationReport(
+                strategyId = strategyId,
+                baseline = successfulSummary(StrategyHealthPhase.BASELINE),
+                strategy = successfulSummary(StrategyHealthPhase.STRATEGY),
+                recovery = successfulSummary(StrategyHealthPhase.RECOVERY),
+                decision = StrategyEvaluationDecision.KEEP_FOR_LAB_SESSION,
+                reason = StrategyEvaluationReason.STRATEGY_SAMPLES_INSUFFICIENT,
+                latencyDeltaMillis = null,
+                allowedStrategyLatencyMillis = null,
+            )
+        }
+    }
+
+    @Test
     fun sessionGatePreventsImmediateFlapping() {
         val policy = StrategyEvaluationPolicy(cooldownMillis = 5_000L)
         val rollback = evaluator().evaluate(
@@ -341,4 +370,12 @@ class StrategyHealthEvaluatorTest {
 
     private fun successes(vararg latencies: Long): List<StrategyHealthSample> =
         latencies.map(StrategyHealthSample::Success)
+
+    private fun successfulSummary(phase: StrategyHealthPhase) = StrategyPhaseSummary(
+        phase = phase,
+        successes = 1,
+        failures = 0,
+        medianLatencyMillis = 10L,
+        failureReasons = emptyMap(),
+    )
 }
