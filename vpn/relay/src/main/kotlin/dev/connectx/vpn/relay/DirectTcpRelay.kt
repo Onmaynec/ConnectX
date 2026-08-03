@@ -53,7 +53,7 @@ class DirectTcpRelay(
 
         val serverSocket = ServerSocket().apply {
             reuseAddress = true
-            bind(InetSocketAddress(InetAddress.getLoopbackAddress(), 0))
+            bind(InetSocketAddress(InetAddress.getByName(LOOPBACK_HOST), 0))
         }
 
         serverSocketReference.set(serverSocket)
@@ -268,6 +268,7 @@ class DirectTcpRelay(
     }
 
     private companion object {
+        const val LOOPBACK_HOST = "127.0.0.1"
         const val DEFAULT_CONNECT_TIMEOUT_MILLIS = 10_000
         const val DEFAULT_MAX_CONNECTIONS = 32
         const val HANDSHAKE_TIMEOUT_MILLIS = 10_000
