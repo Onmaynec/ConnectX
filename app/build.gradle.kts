@@ -12,8 +12,9 @@ android {
         applicationId = "dev.connectx"
         minSdk = 29
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.2.0-alpha.3"
+        versionCode = 5
+        versionName = "0.2.0-alpha.4"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -67,5 +68,7 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui.tooling.preview)
 
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

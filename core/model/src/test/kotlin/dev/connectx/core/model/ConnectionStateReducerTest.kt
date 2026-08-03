@@ -24,6 +24,22 @@ class ConnectionStateReducerTest {
     }
 
     @Test
+    fun `permission request preserves requested probe mode`() {
+        val starting = ConnectionStateReducer.reduce(
+            current = ConnectionUiState(),
+            event = ConnectionEvent.StartRequested(EngineMode.NATIVE_TCP_PROBE),
+        )
+        val result = ConnectionStateReducer.reduce(
+            current = starting,
+            event = ConnectionEvent.PermissionRequired,
+        )
+
+        assertEquals(ConnectionState.PERMISSION_REQUIRED, result.state)
+        assertEquals(EngineMode.NATIVE_TCP_PROBE, result.mode)
+        assertTrue(result.probe.running)
+    }
+
+    @Test
     fun `foundation tunnel starts without marking native bridge running`() {
         val result = ConnectionStateReducer.reduce(
             current = ConnectionUiState(state = ConnectionState.STARTING),
@@ -57,6 +73,36 @@ class ConnectionStateReducerTest {
     }
 
     @Test
+    fun `probe completion stores measured path and returns to off`() {
+        val result = ConnectionStateReducer.reduce(
+            current = ConnectionUiState(
+                state = ConnectionState.LOCAL_TUN_ACTIVE,
+                mode = EngineMode.NATIVE_TCP_PROBE,
+                diagnostics = NativeBridgeDiagnostics(running = true),
+                probe = TcpProbeDiagnostics(running = true),
+            ),
+            event = ConnectionEvent.ProbeCompleted(
+                latencyMillis = 37,
+                uploadedBytes = 64,
+                downloadedBytes = 64,
+                relayConnections = 1,
+                nativeVersion = "connectx-go-bridge/0.2.0-alpha.4",
+                abi = "x86_64",
+            ),
+        )
+
+        assertEquals(ConnectionState.OFF, result.state)
+        assertEquals(EngineMode.FOUNDATION, result.mode)
+        assertFalse(result.diagnostics.running)
+        assertTrue(result.probe.lastSuccess == true)
+        assertEquals(37L, result.probe.latencyMillis)
+        assertEquals(64L, result.probe.uploadedBytes)
+        assertEquals(64L, result.probe.downloadedBytes)
+        assertEquals(1L, result.probe.relayConnections)
+        assertNull(result.errorMessage)
+    }
+
+    @Test
     fun `native stop returns to foundation mode and keeps diagnostic result`() {
         val result = ConnectionStateReducer.reduce(
             current = ConnectionUiState(
@@ -74,6 +120,26 @@ class ConnectionStateReducerTest {
             "Native self-test остановлен без перехвата обычного трафика",
             result.diagnostics.lastResult,
         )
+    }
+
+    @Test
+    fun `probe failure stores readable error and stops probe flag`() {
+        val result = ConnectionStateReducer.reduce(
+            current = ConnectionUiState(
+                state = ConnectionState.LOCAL_TUN_ACTIVE,
+                mode = EngineMode.NATIVE_TCP_PROBE,
+                diagnostics = NativeBridgeDiagnostics(running = true),
+                probe = TcpProbeDiagnostics(running = true),
+            ),
+            event = ConnectionEvent.Failed("Echo nonce mismatch"),
+        )
+
+        assertEquals(ConnectionState.ERROR, result.state)
+        assertEquals("Echo nonce mismatch", result.errorMessage)
+        assertFalse(result.diagnostics.running)
+        assertFalse(result.probe.running)
+        assertEquals(false, result.probe.lastSuccess)
+        assertEquals("Echo nonce mismatch", result.probe.error)
     }
 
     @Test

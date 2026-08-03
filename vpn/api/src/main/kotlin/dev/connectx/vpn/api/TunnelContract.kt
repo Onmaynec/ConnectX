@@ -10,11 +10,17 @@ object TunnelContract {
     const val EXTRA_ENGINE_MODE = "dev.connectx.extra.ENGINE_MODE"
     const val EXTRA_NATIVE_VERSION = "dev.connectx.extra.NATIVE_VERSION"
     const val EXTRA_NATIVE_ABI = "dev.connectx.extra.NATIVE_ABI"
+    const val EXTRA_PROBE_LATENCY_MILLIS = "dev.connectx.extra.PROBE_LATENCY_MILLIS"
+    const val EXTRA_PROBE_UPLOADED_BYTES = "dev.connectx.extra.PROBE_UPLOADED_BYTES"
+    const val EXTRA_PROBE_DOWNLOADED_BYTES = "dev.connectx.extra.PROBE_DOWNLOADED_BYTES"
+    const val EXTRA_PROBE_RELAY_CONNECTIONS = "dev.connectx.extra.PROBE_RELAY_CONNECTIONS"
 
     const val MODE_FOUNDATION = "foundation"
     const val MODE_NATIVE_SELF_TEST = "native_self_test"
+    const val MODE_NATIVE_TCP_PROBE = "native_tcp_probe"
 
     const val STATUS_STARTED = "started"
     const val STATUS_STOPPED = "stopped"
+    const val STATUS_PROBE_SUCCEEDED = "probe_succeeded"
     const val STATUS_ERROR = "error"
 }
