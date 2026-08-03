@@ -6,8 +6,54 @@ All notable changes to ConnectX are documented in this file.
 
 ### Planned
 
+- Bounded TEST-NET TUN probe that executes the TLS write-split plan.
 - Physical-device repeated TUN lifecycle verification.
-- First verified DPI-obfuscation strategy.
+- First strategy verified on a reproducible restricted network.
+
+## [0.3.0-alpha.1]
+
+### Added
+
+- New pure Kotlin `:strategy:api` module.
+- Typed `BypassStrategy` contract and canonical strategy identifiers.
+- Capability model for TCP, UDP, IPv4, IPv6, TLS, QUIC and root.
+- Typed execution context separating lab-only and user-traffic scopes.
+- Global strategy feature gate disabled by default.
+- Immutable strategy registry with duplicate-id rejection.
+- First lab-only strategy descriptor: `tls-clienthello-split-v1`.
+- Bounded TLS record and ClientHello inspector.
+- Deterministic two-write split plan after the ClientHello fixed prefix.
+- Lossless payload reconstruction helper with defensive segment copies.
+- JVM unit tests for parser boundaries, feature gates, registry invariants and reconstruction.
+- Isolated Android instrumentation gate proving the same strategy code is packaged in the APK.
+- Version-aware Compose diagnostics showing that the lab strategy is available but disabled.
+- Application version `0.3.0-alpha.1`, versionCode `8`.
+
+### Rejected inputs
+
+- feature-disabled execution;
+- ordinary user-traffic scope;
+- repeated planning of an already handled payload;
+- UDP, IPv6, QUIC and unknown application contexts;
+- non-handshake TLS records;
+- non-ClientHello handshakes;
+- unsupported TLS record versions;
+- truncated records;
+- mismatched record or handshake lengths;
+- trailing data and payloads larger than the bounded lab limit.
+
+### Safety boundaries
+
+- The strategy planner is not connected to ordinary device traffic.
+- The feature gate is disabled by default and the first strategy is lab-only.
+- Two socket writes are not claimed to equal two TCP packets on the wire.
+- Existing TUN capture remains limited to TEST-NET-1 (`192.0.2.0/24`).
+- No default IPv4 or IPv6 route is added.
+- System DNS traffic is not intercepted and no external resolver is contacted.
+- TLS is not decrypted, modified semantically or intercepted with custom certificates.
+- Payloads, query names and SOCKS credentials are not logged.
+- No remote ConnectX server is used.
+- This release does not claim working censorship bypass.
 
 ## [0.2.0-alpha.6]
 
