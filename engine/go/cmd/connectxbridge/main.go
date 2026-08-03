@@ -131,4 +131,13 @@ func Java_dev_connectx_vpn_nativebridge_NativeTunBridge_nativeLastError(
 	return newJavaString(env, getLastError())
 }
 
+//export Java_dev_connectx_vpn_nativebridge_NativeTunBridge_nativeTransportDiagnostics
+func Java_dev_connectx_vpn_nativebridge_NativeTunBridge_nativeTransportDiagnostics(
+	env *C.JNIEnv,
+	clazz C.jclass,
+) C.jstring {
+	_ = clazz
+	return newJavaString(env, bridge.TransportDiagnostics())
+}
+
 func main() {}
