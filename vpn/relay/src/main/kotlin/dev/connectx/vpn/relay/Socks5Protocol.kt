@@ -128,8 +128,8 @@ internal object Socks5Protocol {
         input.readUnsignedByteOrThrow() // Reserved byte.
         val host = readAddress(
             addressType = input.readUnsignedByteOrThrow(),
-            readByte = input::readUnsignedByteOrThrow,
-            readBytes = input::readExactBytes,
+            readByte = { input.readUnsignedByteOrThrow() },
+            readBytes = { count -> input.readExactBytes(count) },
         )
         val port = (input.readUnsignedByteOrThrow() shl 8) or input.readUnsignedByteOrThrow()
 
