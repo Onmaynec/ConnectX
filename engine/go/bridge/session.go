@@ -128,7 +128,8 @@ func Start(
 }
 
 // Stop is serialized with Start and idempotently releases the native stack,
-// tunnel workers and the duplicated TUN descriptor.
+// tunnel workers and duplicated TUN descriptor. The device is closed before
+// stack.Wait so a blocking TUN reader cannot keep the stack shutdown alive.
 func Stop() error {
 	stateMu.Lock()
 	defer stateMu.Unlock()
@@ -140,9 +141,11 @@ func Stop() error {
 	}
 
 	session.tunnel.Close()
+	// Match tun2socks engine shutdown semantics: closing the fd-backed device
+	// first interrupts its packet reader before waiting for gVisor workers.
+	session.device.Close()
 	session.stack.Close()
 	session.stack.Wait()
-	session.device.Close()
 	return nil
 }
 
