@@ -17,11 +17,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  await-android-ci:
+  await_android_ci:
+    name: Await exact Android CI
     runs-on: ubuntu-latest
     timeout-minutes: 75
     outputs:
-      run-id: ${{ steps.await.outputs.run-id }}
+      run_id: ${{ steps.await.outputs.run_id }}
 
     steps:
       - name: Wait for successful Android CI on exact commit
@@ -65,15 +66,16 @@ jobs:
               exit 1
             fi
 
-            echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
+            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
             exit 0
           done
 
           echo "Timed out waiting for exact-commit Android CI."
           exit 1
 
-  prepare-and-publish:
-    needs: await-android-ci
+  prepare_and_publish:
+    name: Prepare and publish prerelease
+    needs: await_android_ci
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -98,7 +100,7 @@ jobs:
       - name: Download exact Android CI artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ needs.await-android-ci.outputs.run-id }}
+          RUN_ID: ${{ needs.await_android_ci.outputs.run_id }}
           TARGET_SHA: ${{ github.sha }}
         shell: bash
         run: |
