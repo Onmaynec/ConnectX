@@ -23,6 +23,7 @@ import dev.connectx.core.model.ConnectionUiState
 import dev.connectx.core.model.EngineMode
 import dev.connectx.vpn.api.TunnelContract
 import dev.connectx.vpn.nativebridge.NativeTunBridge
+import dev.connectx.vpn.service.ConnectXDnsProbeService
 import dev.connectx.vpn.service.ConnectXTunnelService
 
 class MainActivity : ComponentActivity() {
@@ -231,7 +232,12 @@ class MainActivity : ComponentActivity() {
 
     private fun startTunnelService(mode: EngineMode) {
         runCatching {
-            val serviceIntent = Intent(this, ConnectXTunnelService::class.java).apply {
+            val serviceClass = if (mode == EngineMode.NATIVE_DNS_PROBE) {
+                ConnectXDnsProbeService::class.java
+            } else {
+                ConnectXTunnelService::class.java
+            }
+            val serviceIntent = Intent(this, serviceClass).apply {
                 action = TunnelContract.ACTION_START
                 putExtra(TunnelContract.EXTRA_ENGINE_MODE, mode.toContractValue())
             }
@@ -246,8 +252,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun stopTunnelService() {
+        val activeMode = connectionState.value.mode
         dispatch(ConnectionEvent.StopRequested)
-        val serviceIntent = Intent(this, ConnectXTunnelService::class.java).apply {
+        val serviceClass = if (activeMode == EngineMode.NATIVE_DNS_PROBE) {
+            ConnectXDnsProbeService::class.java
+        } else {
+            ConnectXTunnelService::class.java
+        }
+        val serviceIntent = Intent(this, serviceClass).apply {
             action = TunnelContract.ACTION_STOP
         }
         startService(serviceIntent)
