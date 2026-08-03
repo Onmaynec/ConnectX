@@ -123,6 +123,8 @@ DISABLED
 
 An interrupted service, setup failure, cancellation, or cleanup failure cannot silently leave the strategy approved. Generation checks are performed before and during every phase, write, echo validation, and relay-stat wait.
 
+A late or duplicated `ACTION_STOP` after a completed evaluation is explicitly idempotent. Once resources are closed and the gate is `LAB_APPROVED`, a stale stop command does not manufacture a failure or move the session into cooldown. Cooldown on stop is applied only while resources are still active or the gate is still `EVALUATING`.
+
 ## Android boundaries
 
 The dedicated `ConnectXStrategyEvaluationService`:
@@ -134,8 +136,15 @@ The dedicated `ConnectXStrategyEvaluationService`:
 - protects relay sockets from re-entering the VPN;
 - uses random in-memory SOCKS5 credentials;
 - closes client socket, native stack, TUN, relay, and endpoint in generation-safe order;
+- treats a duplicated post-teardown stop as an idempotent no-op for gate policy;
 - does not install `0.0.0.0/0` or `::/0`;
 - does not read or modify ordinary application traffic.
+
+The Android instrumentation gate verifies the full A/B/A path, confirms native teardown, sends a late stop after success, immediately starts a new explicit evaluation to `STATUS_STARTED`, and then verifies active-stop cleanup. This regression sequence prevents an already approved result from being poisoned by delayed service commands.
+
+## Release activation
+
+The release workflow is committed with the implementation, but its `.publish` marker is intentionally not. After the implementation PR is merged and the workflow exists in `main`, a separate minimal marker PR activates the exact-commit release guard. This avoids relying on the same push both registering and triggering a newly introduced workflow.
 
 ## What this does not prove
 
