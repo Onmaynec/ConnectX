@@ -116,6 +116,48 @@ class MainActivity : ComponentActivity() {
                     ),
                 )
 
+                TunnelContract.STATUS_DNS_PROBE_SUCCEEDED -> dispatch(
+                    ConnectionEvent.DnsProbeCompleted(
+                        latencyMillis = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_LATENCY_MILLIS,
+                            0L,
+                        ),
+                        uploadedBytes = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_UPLOADED_BYTES,
+                            0L,
+                        ),
+                        downloadedBytes = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_DOWNLOADED_BYTES,
+                            0L,
+                        ),
+                        relayAssociations = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_RELAY_ASSOCIATIONS,
+                            0L,
+                        ),
+                        datagrams = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_DATAGRAMS,
+                            0L,
+                        ),
+                        queries = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_DNS_QUERIES,
+                            0L,
+                        ),
+                        responses = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_DNS_RESPONSES,
+                            0L,
+                        ),
+                        answer = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_PROBE_DNS_ANSWER,
+                        ).orEmpty(),
+                        nativeVersion = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_NATIVE_VERSION,
+                        ),
+                        abi = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_NATIVE_ABI,
+                        ),
+                    ),
+                )
+
                 TunnelContract.STATUS_STOPPED -> dispatch(ConnectionEvent.TunnelStopped)
                 TunnelContract.STATUS_ERROR -> dispatch(
                     ConnectionEvent.Failed(
@@ -146,6 +188,9 @@ class MainActivity : ComponentActivity() {
                     },
                     onNativeUdpProbe = {
                         requestTunnelPermission(EngineMode.NATIVE_UDP_PROBE)
+                    },
+                    onNativeDnsProbe = {
+                        requestTunnelPermission(EngineMode.NATIVE_DNS_PROBE)
                     },
                 )
             }
@@ -265,6 +310,7 @@ private fun EngineMode.toContractValue(): String = when (this) {
     EngineMode.NATIVE_SELF_TEST -> TunnelContract.MODE_NATIVE_SELF_TEST
     EngineMode.NATIVE_TCP_PROBE -> TunnelContract.MODE_NATIVE_TCP_PROBE
     EngineMode.NATIVE_UDP_PROBE -> TunnelContract.MODE_NATIVE_UDP_PROBE
+    EngineMode.NATIVE_DNS_PROBE -> TunnelContract.MODE_NATIVE_DNS_PROBE
 }
 
 private fun Intent.readEngineMode(): EngineMode = when (
@@ -273,5 +319,6 @@ private fun Intent.readEngineMode(): EngineMode = when (
     TunnelContract.MODE_NATIVE_SELF_TEST -> EngineMode.NATIVE_SELF_TEST
     TunnelContract.MODE_NATIVE_TCP_PROBE -> EngineMode.NATIVE_TCP_PROBE
     TunnelContract.MODE_NATIVE_UDP_PROBE -> EngineMode.NATIVE_UDP_PROBE
+    TunnelContract.MODE_NATIVE_DNS_PROBE -> EngineMode.NATIVE_DNS_PROBE
     else -> EngineMode.FOUNDATION
 }
