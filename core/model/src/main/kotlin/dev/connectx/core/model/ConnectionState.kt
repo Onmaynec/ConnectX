@@ -14,6 +14,7 @@ enum class EngineMode {
     NATIVE_SELF_TEST,
     NATIVE_TCP_PROBE,
     NATIVE_UDP_PROBE,
+    NATIVE_DNS_PROBE,
 }
 
 data class NativeBridgeDiagnostics(
@@ -45,12 +46,27 @@ data class UdpProbeDiagnostics(
     val error: String? = null,
 )
 
+data class DnsProbeDiagnostics(
+    val running: Boolean = false,
+    val lastSuccess: Boolean? = null,
+    val latencyMillis: Long? = null,
+    val uploadedBytes: Long? = null,
+    val downloadedBytes: Long? = null,
+    val relayAssociations: Long? = null,
+    val datagrams: Long? = null,
+    val queries: Long? = null,
+    val responses: Long? = null,
+    val answer: String? = null,
+    val error: String? = null,
+)
+
 data class ConnectionUiState(
     val state: ConnectionState = ConnectionState.OFF,
     val mode: EngineMode = EngineMode.FOUNDATION,
     val diagnostics: NativeBridgeDiagnostics = NativeBridgeDiagnostics(),
     val probe: TcpProbeDiagnostics = TcpProbeDiagnostics(),
     val udpProbe: UdpProbeDiagnostics = UdpProbeDiagnostics(),
+    val dnsProbe: DnsProbeDiagnostics = DnsProbeDiagnostics(),
     val errorMessage: String? = null,
 )
 
@@ -88,6 +104,19 @@ sealed interface ConnectionEvent {
         val abi: String? = null,
     ) : ConnectionEvent
 
+    data class DnsProbeCompleted(
+        val latencyMillis: Long,
+        val uploadedBytes: Long,
+        val downloadedBytes: Long,
+        val relayAssociations: Long,
+        val datagrams: Long,
+        val queries: Long,
+        val responses: Long,
+        val answer: String,
+        val nativeVersion: String? = null,
+        val abi: String? = null,
+    ) : ConnectionEvent
+
     data object StopRequested : ConnectionEvent
     data object TunnelStopped : ConnectionEvent
 
@@ -117,6 +146,10 @@ object ConnectionStateReducer {
                 running = event.mode == EngineMode.NATIVE_UDP_PROBE,
                 error = null,
             ),
+            dnsProbe = current.dnsProbe.copy(
+                running = event.mode == EngineMode.NATIVE_DNS_PROBE,
+                error = null,
+            ),
             errorMessage = null,
         )
 
@@ -135,6 +168,7 @@ object ConnectionStateReducer {
             mode = EngineMode.FOUNDATION,
             probe = current.probe.copy(running = false),
             udpProbe = current.udpProbe.copy(running = false),
+            dnsProbe = current.dnsProbe.copy(running = false),
             errorMessage = "Системное разрешение не предоставлено",
         )
 
@@ -150,6 +184,7 @@ object ConnectionStateReducer {
                     EngineMode.NATIVE_SELF_TEST -> "Native self-test запущен на TEST-NET"
                     EngineMode.NATIVE_TCP_PROBE -> "TCP probe проходит через TEST-NET TUN"
                     EngineMode.NATIVE_UDP_PROBE -> "UDP probe проходит через TEST-NET TUN"
+                    EngineMode.NATIVE_DNS_PROBE -> "DNS probe проходит через TEST-NET TUN"
                     EngineMode.FOUNDATION -> current.diagnostics.lastResult
                 },
             ),
@@ -159,6 +194,10 @@ object ConnectionStateReducer {
             ),
             udpProbe = current.udpProbe.copy(
                 running = event.mode == EngineMode.NATIVE_UDP_PROBE,
+                error = null,
+            ),
+            dnsProbe = current.dnsProbe.copy(
+                running = event.mode == EngineMode.NATIVE_DNS_PROBE,
                 error = null,
             ),
             errorMessage = null,
@@ -183,6 +222,7 @@ object ConnectionStateReducer {
                 relayConnections = event.relayConnections,
             ),
             udpProbe = current.udpProbe.copy(running = false),
+            dnsProbe = current.dnsProbe.copy(running = false),
             errorMessage = null,
         )
 
@@ -206,6 +246,34 @@ object ConnectionStateReducer {
                 relayAssociations = event.relayAssociations,
                 datagrams = event.datagrams,
             ),
+            dnsProbe = current.dnsProbe.copy(running = false),
+            errorMessage = null,
+        )
+
+        is ConnectionEvent.DnsProbeCompleted -> current.copy(
+            state = ConnectionState.OFF,
+            mode = EngineMode.FOUNDATION,
+            diagnostics = current.diagnostics.copy(
+                available = true,
+                version = event.nativeVersion ?: current.diagnostics.version,
+                abi = event.abi ?: current.diagnostics.abi,
+                running = false,
+                lastResult = "DNS-путь TUN → native stack → relay подтверждён",
+            ),
+            probe = current.probe.copy(running = false),
+            udpProbe = current.udpProbe.copy(running = false),
+            dnsProbe = DnsProbeDiagnostics(
+                running = false,
+                lastSuccess = true,
+                latencyMillis = event.latencyMillis,
+                uploadedBytes = event.uploadedBytes,
+                downloadedBytes = event.downloadedBytes,
+                relayAssociations = event.relayAssociations,
+                datagrams = event.datagrams,
+                queries = event.queries,
+                responses = event.responses,
+                answer = event.answer,
+            ),
             errorMessage = null,
         )
 
@@ -224,11 +292,13 @@ object ConnectionStateReducer {
                         "Native self-test остановлен без перехвата обычного трафика"
                     EngineMode.NATIVE_TCP_PROBE -> "TCP probe отменён и ресурсы закрыты"
                     EngineMode.NATIVE_UDP_PROBE -> "UDP probe отменён и ресурсы закрыты"
+                    EngineMode.NATIVE_DNS_PROBE -> "DNS probe отменён и ресурсы закрыты"
                     EngineMode.FOUNDATION -> current.diagnostics.lastResult
                 },
             ),
             probe = current.probe.copy(running = false),
             udpProbe = current.udpProbe.copy(running = false),
+            dnsProbe = current.dnsProbe.copy(running = false),
             errorMessage = null,
         )
 
@@ -261,6 +331,11 @@ object ConnectionStateReducer {
                 running = false,
                 lastSuccess = if (current.mode == EngineMode.NATIVE_UDP_PROBE) false else current.udpProbe.lastSuccess,
                 error = if (current.mode == EngineMode.NATIVE_UDP_PROBE) event.message else current.udpProbe.error,
+            ),
+            dnsProbe = current.dnsProbe.copy(
+                running = false,
+                lastSuccess = if (current.mode == EngineMode.NATIVE_DNS_PROBE) false else current.dnsProbe.lastSuccess,
+                error = if (current.mode == EngineMode.NATIVE_DNS_PROBE) event.message else current.dnsProbe.error,
             ),
             errorMessage = event.message,
         )
