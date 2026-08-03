@@ -31,8 +31,10 @@ import java.io.DataInputStream
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.security.SecureRandom
 import kotlin.math.max
 
@@ -372,58 +374,88 @@ class ConnectXTunnelService : VpnService() {
         check(NativeTunBridge.isRunning()) { "Native bridge остановился до UDP probe" }
 
         val payload = ByteArray(PROBE_PAYLOAD_BYTES).also(secureRandom::nextBytes)
-        val socket = DatagramSocket(null)
-        udpProbeSocket = socket
         val startedAt = SystemClock.elapsedRealtimeNanos()
+        Thread.sleep(UDP_ROUTE_SETTLE_MILLIS)
+        var lastTimeout: SocketTimeoutException? = null
 
-        try {
-            socket.reuseAddress = true
-            socket.bind(InetSocketAddress(0))
-            socket.soTimeout = PROBE_TIMEOUT_MILLIS
-            // This socket is intentionally not protected. The TEST-NET route
-            // must carry the UDP datagram into Android TUN and the native stack.
-            socket.connect(
-                InetSocketAddress(UDP_PROBE_TEST_HOST, UDP_PROBE_TEST_PORT),
-            )
-            socket.send(DatagramPacket(payload, payload.size))
-
-            val responseBuffer = ByteArray(payload.size + 1)
-            val response = DatagramPacket(responseBuffer, responseBuffer.size)
-            socket.receive(response)
-            val echoed = response.data.copyOfRange(
-                response.offset,
-                response.offset + response.length,
-            )
-            check(payload.contentEquals(echoed)) {
-                "UDP probe получил несовпадающий echo nonce"
+        repeat(UDP_PROBE_ATTEMPTS) { attempt ->
+            check(activeMode == TunnelContract.MODE_NATIVE_UDP_PROBE) {
+                "UDP probe был отменён"
+            }
+            check(NativeTunBridge.isRunning()) {
+                "Native bridge остановился во время UDP probe"
             }
 
-            val latencyMillis = elapsedMillisSince(startedAt)
-            val stats = awaitUdpProbeRelayStats(payload.size.toLong())
-            check(stats.udpAssociations >= 1L) {
-                "Relay не подтвердил authenticated UDP association"
-            }
-            check(stats.udpDatagrams >= 1L) {
-                "Relay не подтвердил UDP datagram exchange"
-            }
-            check(stats.udpUploadedBytes >= payload.size.toLong()) {
-                "Relay не подтвердил отправленные байты UDP probe"
-            }
-            check(stats.udpDownloadedBytes >= payload.size.toLong()) {
-                "Relay не подтвердил полученные байты UDP probe"
+            val socket = DatagramSocket(null)
+            udpProbeSocket = socket
+            try {
+                socket.reuseAddress = true
+                // Explicit Inet4Address prevents Android from choosing an IPv6
+                // wildcard socket that cannot use the IPv4-only TEST-NET route.
+                socket.bind(
+                    InetSocketAddress(
+                        InetAddress.getByName(IPV4_ANY_HOST),
+                        0,
+                    ),
+                )
+                socket.soTimeout = UDP_PROBE_ATTEMPT_TIMEOUT_MILLIS
+                // This socket is intentionally not protected. The TEST-NET route
+                // must carry the UDP datagram into Android TUN and the native stack.
+                socket.connect(
+                    InetSocketAddress(UDP_PROBE_TEST_HOST, UDP_PROBE_TEST_PORT),
+                )
+                socket.send(DatagramPacket(payload, payload.size))
+
+                val responseBuffer = ByteArray(payload.size + 1)
+                val response = DatagramPacket(responseBuffer, responseBuffer.size)
+                socket.receive(response)
+                val echoed = response.data.copyOfRange(
+                    response.offset,
+                    response.offset + response.length,
+                )
+                check(payload.contentEquals(echoed)) {
+                    "UDP probe получил несовпадающий echo nonce"
+                }
+
+                val latencyMillis = elapsedMillisSince(startedAt)
+                val stats = awaitUdpProbeRelayStats(payload.size.toLong())
+                check(stats.udpAssociations >= 1L) {
+                    "Relay не подтвердил authenticated UDP association"
+                }
+                check(stats.udpDatagrams >= 1L) {
+                    "Relay не подтвердил UDP datagram exchange"
+                }
+                check(stats.udpUploadedBytes >= payload.size.toLong()) {
+                    "Relay не подтвердил отправленные байты UDP probe"
+                }
+                check(stats.udpDownloadedBytes >= payload.size.toLong()) {
+                    "Relay не подтвердил полученные байты UDP probe"
+                }
+
+                return UdpProbeResult(
+                    latencyMillis = latencyMillis,
+                    uploadedBytes = stats.udpUploadedBytes,
+                    downloadedBytes = stats.udpDownloadedBytes,
+                    relayAssociations = stats.udpAssociations,
+                    datagrams = stats.udpDatagrams,
+                )
+            } catch (error: SocketTimeoutException) {
+                lastTimeout = error
+            } finally {
+                if (udpProbeSocket === socket) udpProbeSocket = null
+                runCatching { socket.close() }
             }
 
-            return UdpProbeResult(
-                latencyMillis = latencyMillis,
-                uploadedBytes = stats.udpUploadedBytes,
-                downloadedBytes = stats.udpDownloadedBytes,
-                relayAssociations = stats.udpAssociations,
-                datagrams = stats.udpDatagrams,
-            )
-        } finally {
-            if (udpProbeSocket === socket) udpProbeSocket = null
-            runCatching { socket.close() }
+            if (attempt + 1 < UDP_PROBE_ATTEMPTS) {
+                Thread.sleep(UDP_PROBE_RETRY_DELAY_MILLIS)
+            }
         }
+
+        throw IOException(
+            "UDP probe не получил echo после $UDP_PROBE_ATTEMPTS IPv4 попыток; " +
+                NativeTunBridge.transportDiagnostics(),
+            lastTimeout,
+        )
     }
 
     private fun nextProbeGeneration(): Long {
@@ -745,6 +777,7 @@ class ConnectXTunnelService : VpnService() {
         const val TEST_ROUTE = "192.0.2.0"
         const val TEST_ROUTE_PREFIX = 24
         const val RELAY_HOST = "127.0.0.1"
+        const val IPV4_ANY_HOST = "0.0.0.0"
 
         const val TCP_PROBE_TEST_HOST = "192.0.2.1"
         const val TCP_PROBE_TEST_PORT = 18_080
@@ -753,6 +786,10 @@ class ConnectXTunnelService : VpnService() {
         const val PROBE_PAYLOAD_BYTES = 64
         const val PROBE_MAX_PAYLOAD_BYTES = 4 * 1024
         const val PROBE_TIMEOUT_MILLIS = 5_000
+        const val UDP_ROUTE_SETTLE_MILLIS = 300L
+        const val UDP_PROBE_ATTEMPTS = 3
+        const val UDP_PROBE_ATTEMPT_TIMEOUT_MILLIS = 1_500
+        const val UDP_PROBE_RETRY_DELAY_MILLIS = 150L
         const val PROBE_STATS_TIMEOUT_MILLIS = 1_000L
         const val PROBE_STATS_POLL_MILLIS = 10L
         const val NANOS_PER_MILLISECOND = 1_000_000L
