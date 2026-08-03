@@ -1,9 +1,11 @@
 name: Publish v0.2.0-alpha.3
 
 on:
-  pull_request:
-    types: [closed]
-    branches: [main]
+  push:
+    branches:
+      - main
+    paths:
+      - docs/releases/v0.2.0-alpha.3.publish
   workflow_dispatch:
 
 permissions:
@@ -11,41 +13,25 @@ permissions:
 
 jobs:
   verify:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.pull_request.merged == true &&
-       github.event.pull_request.head.ref == 'feature/v0.2.0-alpha3')
     runs-on: ubuntu-latest
     timeout-minutes: 50
-    outputs:
-      target_sha: ${{ steps.target.outputs.sha }}
 
     steps:
-      - name: Resolve release commit
-        id: target
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-          else
-            echo "sha=${{ github.event.pull_request.merge_commit_sha }}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Checkout release commit
+      - name: Checkout exact release commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.target.outputs.sha }}
+          ref: ${{ github.sha }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Set up Go 1.26.3
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26.3'
+          go-version: "1.26.3"
           cache-dependency-path: |
             engine/go/go.mod
             engine/go/go.sum
@@ -67,11 +53,13 @@ jobs:
           cd ../..
           chmod +x engine/go/build-android.sh
           engine/go/build-android.sh "$ANDROID_SDK_ROOT/ndk/28.0.13004108"
+          test -s engine/go/build/android/jniLibs/arm64-v8a/libconnectxbridge.so
+          test -s engine/go/build/android/jniLibs/x86_64/libconnectxbridge.so
 
       - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.13'
+          gradle-version: "8.13"
 
       - name: Run JVM tests and lint
         run: |
@@ -106,7 +94,7 @@ jobs:
       - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
-          name: alpha3-release-assets-${{ steps.target.outputs.sha }}
+          name: alpha3-release-assets-${{ github.sha }}
           path: release-assets
           if-no-files-found: error
           retention-days: 14
@@ -114,7 +102,7 @@ jobs:
       - name: Upload native runtime payload
         uses: actions/upload-artifact@v4
         with:
-          name: alpha3-native-${{ steps.target.outputs.sha }}
+          name: alpha3-native-${{ github.sha }}
           path: engine/go/build/android
           if-no-files-found: error
           retention-days: 14
@@ -123,31 +111,34 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    env:
-      ANDROID_AVD_HOME: ${{ runner.temp }}/connectx-release-avd
-      ANDROID_USER_HOME: ${{ runner.temp }}/connectx-release-android-user
 
     steps:
-      - name: Checkout release commit
+      - name: Checkout exact release commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.verify.outputs.target_sha }}
+          ref: ${{ github.sha }}
+
+      - name: Configure Android runtime paths
+        shell: bash
+        run: |
+          echo "ANDROID_AVD_HOME=$RUNNER_TEMP/connectx-release-avd" >> "$GITHUB_ENV"
+          echo "ANDROID_USER_HOME=$RUNNER_TEMP/connectx-release-android-user" >> "$GITHUB_ENV"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.13'
+          gradle-version: "8.13"
 
       - name: Download verified native runtime payload
         uses: actions/download-artifact@v4
         with:
-          name: alpha3-native-${{ needs.verify.outputs.target_sha }}
+          name: alpha3-native-${{ github.sha }}
           path: engine/go/build/android
 
       - name: Free runtime runner disk
@@ -186,7 +177,6 @@ jobs:
             --name connectx-release-ci \
             --path "$ANDROID_AVD_HOME/connectx-release-ci.avd" \
             --package "system-images;android-35;google_apis;x86_64"
-
           "$ANDROID_SDK_ROOT/emulator/emulator" -list-avds | tee avd-list.txt
           grep -qx 'connectx-release-ci' avd-list.txt
           df -h / | tee disk-before-emulator.txt
@@ -196,7 +186,6 @@ jobs:
         run: |
           ADB="$ANDROID_SDK_ROOT/platform-tools/adb"
           EMULATOR="$ANDROID_SDK_ROOT/emulator/emulator"
-
           nohup "$EMULATOR" \
             -avd connectx-release-ci \
             -accel on \
@@ -209,11 +198,10 @@ jobs:
             -no-metrics \
             -gpu swiftshader_indirect \
             > emulator.log 2>&1 &
-          EMULATOR_PID=$!
-          echo "$EMULATOR_PID" > emulator.pid
+          echo "$!" > emulator.pid
 
           sleep 5
-          if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
+          if ! kill -0 "$(cat emulator.pid)" 2>/dev/null; then
             cat disk-before-emulator.txt 2>/dev/null || true
             cat accel-check.txt 2>/dev/null || true
             cat avd-list.txt 2>/dev/null || true
@@ -223,28 +211,20 @@ jobs:
 
           "$ADB" start-server
           timeout 300 "$ADB" wait-for-device
-
           DEADLINE=$((SECONDS + 300))
-          while true; do
-            BOOT_COMPLETED="$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
-            if [[ "$BOOT_COMPLETED" == "1" ]]; then
-              break
-            fi
-            if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
-              echo "Android emulator exited before boot completed" >&2
+          until [[ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; do
+            if ! kill -0 "$(cat emulator.pid)" 2>/dev/null; then
               cat disk-before-emulator.txt 2>/dev/null || true
               cat emulator.log
               exit 1
             fi
             if (( SECONDS >= DEADLINE )); then
-              echo "Timed out waiting for Android boot" >&2
               cat disk-before-emulator.txt 2>/dev/null || true
               cat emulator.log
               exit 1
             fi
             sleep 5
           done
-
           "$ADB" shell getprop ro.product.cpu.abi
           "$ADB" shell getprop ro.build.version.sdk
 
@@ -265,22 +245,22 @@ jobs:
           cp disk-before-emulator.txt emulator-diagnostics/ 2>/dev/null || true
           timeout 10 "$ADB" devices -l > emulator-diagnostics/devices.txt 2>&1 || true
           timeout 10 "$ADB" logcat -d > emulator-diagnostics/logcat.txt 2>&1 || true
-          cp -R vpn/nativebridge/build/reports/androidTests \
-            emulator-diagnostics/reports 2>/dev/null || true
-          cp -R vpn/nativebridge/build/outputs/androidTest-results \
-            emulator-diagnostics/results 2>/dev/null || true
+          cp -R vpn/nativebridge/build/reports/androidTests emulator-diagnostics/reports 2>/dev/null || true
+          cp -R vpn/nativebridge/build/outputs/androidTest-results emulator-diagnostics/results 2>/dev/null || true
 
-      - name: Store emulator diagnostics
+      - name: Upload emulator diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: alpha3-emulator-smoke-${{ needs.verify.outputs.target_sha }}
+          name: alpha3-emulator-smoke-${{ github.sha }}
           path: emulator-diagnostics
           if-no-files-found: warn
           retention-days: 14
 
   publish:
-    needs: [verify, android-runtime-smoke]
+    needs:
+      - verify
+      - android-runtime-smoke
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -288,26 +268,25 @@ jobs:
       - name: Checkout release notes
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.verify.outputs.target_sha }}
+          ref: ${{ github.sha }}
 
       - name: Download release assets
         uses: actions/download-artifact@v4
         with:
-          name: alpha3-release-assets-${{ needs.verify.outputs.target_sha }}
+          name: alpha3-release-assets-${{ github.sha }}
           path: release-assets
 
       - name: Publish GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: v0.2.0-alpha.3
-          TARGET_SHA: ${{ needs.verify.outputs.target_sha }}
+          TARGET_SHA: ${{ github.sha }}
         shell: bash
         run: |
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
             echo "Release $TAG_NAME already exists; nothing to do."
             exit 0
           fi
-
           gh release create "$TAG_NAME" \
             release-assets/* \
             --target "$TARGET_SHA" \
