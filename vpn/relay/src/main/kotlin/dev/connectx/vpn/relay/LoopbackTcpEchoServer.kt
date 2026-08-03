@@ -64,7 +64,7 @@ class LoopbackTcpEchoServer(
         if (!running.getAndSet(false)) return
 
         serverReference.getAndSet(null).closeQuietly()
-        activeSockets.toList().forEach(Socket::closeQuietly)
+        activeSockets.toList().forEach { socket -> socket.closeQuietly() }
         activeSockets.clear()
         acceptThreadReference.getAndSet(null)?.let { thread ->
             if (thread !== Thread.currentThread()) {
@@ -88,6 +88,8 @@ class LoopbackTcpEchoServer(
             daemonThread("connectx-probe-echo-client") {
                 try {
                     echo(client)
+                } catch (_: IOException) {
+                    // Timeout, payload limit, and shutdown all close this one client.
                 } finally {
                     activeSockets -= client
                     client.closeQuietly()
