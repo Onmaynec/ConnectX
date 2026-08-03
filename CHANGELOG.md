@@ -10,6 +10,43 @@ All notable changes to ConnectX are documented in this file.
 - Physical-device repeated TUN lifecycle verification.
 - First strategy verified on a reproducible restricted network.
 
+## [0.3.0-alpha.2]
+
+### Added
+
+- Pure Kotlin `StrategyHealthEvaluator` with typed `BASELINE`, `STRATEGY`, and `RECOVERY` phases.
+- Bounded success and failure samples that never contain payloads, URLs, DNS names, credentials, or user identifiers.
+- Deterministic decisions: `KEEP_FOR_LAB_SESSION`, `ROLLBACK_CONFIRMED`, `REJECT_BASELINE_UNHEALTHY`, `REJECT_ENVIRONMENT_UNSTABLE`, and `INCONCLUSIVE`.
+- Overflow-safe median latency comparison with relative and absolute regression budgets.
+- Immutable session gate with `READY`, `EVALUATING`, `LAB_APPROVED`, `COOLDOWN`, and `DISABLED` states.
+- Fixed 60-second cooldown after rollback, rejection, interruption, setup failure, or unsafe teardown.
+- Dedicated `ConnectXStrategyEvaluationService` for a bounded A/B/A lab sequence.
+- Baseline and recovery phases using one write, with the strategy phase using the exact two-write plan from `tls-clienthello-split-v1`.
+- Three separate TCP connections through the real Android TEST-NET TUN, gVisor/tun2socks, authenticated local SOCKS5 relay, and protected loopback echo endpoint.
+- Byte-for-byte ClientHello echo verification and relay connection/byte evidence for every completed phase.
+- Typed UI diagnostics for per-phase latency, failure reasons, decision, reason, allowed latency, gate state, bytes, and relay connections.
+- Android instrumentation regression that verifies A/B/A completion, native teardown, late-stop idempotence, immediate explicit restart to `STATUS_STARTED`, and active-stop cleanup.
+- Guarded prerelease workflow that waits for a successful Android CI push run on the exact release commit and reuses only its APK and native artifacts.
+- Application version `0.3.0-alpha.2`, versionCode `9`.
+
+### Fixed
+
+- A duplicated or delayed `ACTION_STOP` after successful teardown no longer converts `LAB_APPROVED` into an artificial cooldown.
+- Cooldown on stop is now applied only while evaluation resources are active or the session gate is still `EVALUATING`.
+- Release activation is separated from the implementation merge: the `.publish` marker is added only by a later minimal PR after the workflow is present in `main`.
+
+### Safety boundaries
+
+- The A/B/A evaluator remains `LAB_ONLY` and is started only by an explicit user action after Android VPN consent.
+- TUN capture remains limited to TEST-NET-1 (`192.0.2.0/24`).
+- The only evaluation target is `192.0.2.1:18444`, rewritten to an endpoint bound to `127.0.0.1`.
+- No default IPv4 or IPv6 route is installed.
+- Ordinary application traffic is not evaluated or modified.
+- Two socket writes are not claimed to equal two TCP segments or packets on the wire.
+- No external domain, resolver, or remote ConnectX server is contacted.
+- TLS is not decrypted and no MITM, custom certificate, or user CA is used.
+- A successful local A/B/A result is not evidence of working censorship bypass on a real restricted network.
+
 ## [0.3.0-alpha.1]
 
 ### Added
