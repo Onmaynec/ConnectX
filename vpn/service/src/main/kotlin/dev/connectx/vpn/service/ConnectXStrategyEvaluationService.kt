@@ -496,7 +496,9 @@ class ConnectXStrategyEvaluationService : VpnService() {
     }
 
     private fun stopEvaluationAndService() {
-        enterCooldownAfterFailure()
+        if (shouldEnterCooldownOnStop()) {
+            enterCooldownAfterFailure()
+        }
         val cleanupError = closeResources()
         if (cleanupError == null) {
             publishStatus(status = TunnelContract.STATUS_STOPPED)
@@ -510,6 +512,16 @@ class ConnectXStrategyEvaluationService : VpnService() {
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
+
+    /**
+     * A late or duplicated STOP for an already completed service is idempotent.
+     * Only a live resource set or an evaluation that has entered its gate may
+     * produce cooldown; an approved result must not be poisoned after teardown.
+     */
+    private fun shouldEnterCooldownOnStop(): Boolean =
+        hasActiveResources() || synchronized(GATE_LOCK) {
+            processGate.state == StrategySessionGateState.EVALUATING
+        }
 
     private fun enterCooldownAfterFailure() {
         val now = SystemClock.elapsedRealtime()
