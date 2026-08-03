@@ -132,15 +132,19 @@ jobs:
           grep -q 'assets/tun2socks-MIT.txt' apk-contents.txt
           grep -q 'assets/gvisor-LICENSE.txt' apk-contents.txt
 
-      - name: Prepare release assets and checksums
+      - name: Prepare deterministic release assets and checksums
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release-assets
           cp downloaded/apk/app-debug.apk \
             release-assets/ConnectX-v0.3.0-alpha.2-debug.apk
+
+          find downloaded/native -type f -exec touch -t 198001010000 {} +
           (cd downloaded/native && \
-            zip -r "$GITHUB_WORKSPACE/release-assets/ConnectX-v0.3.0-alpha.2-native.zip" .)
+            find . -type f -print0 | sort -z | \
+            xargs -0 zip -X "$GITHUB_WORKSPACE/release-assets/ConnectX-v0.3.0-alpha.2-native.zip")
+
           cp THIRD_PARTY_NOTICES.md \
             release-assets/THIRD_PARTY_NOTICES-v0.3.0-alpha.2.md
           cp licenses/tun2socks-MIT.txt release-assets/tun2socks-MIT.txt
@@ -156,7 +160,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Publish or repair GitHub prerelease
+      - name: Publish or verify GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: v0.3.0-alpha.2
@@ -184,6 +188,34 @@ jobs:
             printf '%s\n' "$object_sha"
           }
 
+          verify_or_upload_assets() {
+            local names asset_path asset_name downloaded_path
+            mkdir -p existing-release-assets
+            names="$(gh release view "$TAG_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets \
+              --jq '.assets[].name')"
+
+            for asset_path in release-assets/*; do
+              asset_name="$(basename "$asset_path")"
+              if grep -Fxq "$asset_name" <<<"$names"; then
+                gh release download "$TAG_NAME" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --pattern "$asset_name" \
+                  --dir existing-release-assets
+                downloaded_path="existing-release-assets/$asset_name"
+                test -s "$downloaded_path"
+                if ! cmp -s "$asset_path" "$downloaded_path"; then
+                  echo "Existing release asset $asset_name differs from exact-commit output."
+                  exit 1
+                fi
+              else
+                gh release upload "$TAG_NAME" "$asset_path" \
+                  --repo "$GITHUB_REPOSITORY"
+              fi
+            done
+          }
+
           if gh release view "$TAG_NAME" \
             --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             existing_sha="$(resolve_tag_commit)"
@@ -200,16 +232,13 @@ jobs:
               exit 1
             fi
 
-            gh release upload "$TAG_NAME" \
-              release-assets/* \
-              --repo "$GITHUB_REPOSITORY" \
-              --clobber
+            verify_or_upload_assets
             gh release edit "$TAG_NAME" \
               --repo "$GITHUB_REPOSITORY" \
               --title "ConnectX v0.3.0-alpha.2 — Strategy Evaluation and Rollback Gate" \
               --notes-file docs/releases/v0.3.0-alpha.2.md \
               --prerelease
-            echo "Verified and repaired existing prerelease $TAG_NAME at $TARGET_SHA."
+            echo "Verified existing prerelease $TAG_NAME at $TARGET_SHA."
             exit 0
           fi
 
