@@ -1,5 +1,6 @@
 package dev.connectx.app
 
+import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -30,6 +31,7 @@ class NativeTcpProbeInstrumentedTest {
         val context = instrumentation.targetContext
         val packageName = context.packageName
         val statuses = LinkedBlockingQueue<Intent>()
+        var activity: Activity? = null
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 intent?.let { statuses.offer(Intent(it)) }
@@ -51,6 +53,13 @@ class NativeTcpProbeInstrumentedTest {
                 "VPN app-op did not prepare the test package: $appOp",
                 VpnService.prepare(context),
             )
+
+            activity = instrumentation.startActivitySync(
+                Intent(context, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                },
+            )
+            instrumentation.waitForIdleSync()
 
             val startIntent = Intent(context, ConnectXTunnelService::class.java).apply {
                 action = TunnelContract.ACTION_START
@@ -98,6 +107,7 @@ class NativeTcpProbeInstrumentedTest {
             }
             runCatching { context.startService(stopIntent) }
             runCatching { context.unregisterReceiver(receiver) }
+            instrumentation.runOnMainSync { activity?.finish() }
             shell("appops set $packageName ACTIVATE_VPN default")
         }
     }
