@@ -53,7 +53,16 @@ data class StrategyDescriptor(
     val capabilities: Set<StrategyCapability>,
     val requiresRoot: Boolean,
     val reversible: Boolean,
-)
+) {
+    init {
+        require(displayName.isNotBlank()) { "Strategy display name must not be blank" }
+        require(description.isNotBlank()) { "Strategy description must not be blank" }
+        require(capabilities.isNotEmpty()) { "Strategy must declare at least one capability" }
+        require(!requiresRoot || StrategyCapability.ROOT in capabilities) {
+            "A root-required strategy must declare the ROOT capability"
+        }
+    }
+}
 
 data class StrategyContext(
     val transport: TransportProtocol,
@@ -100,19 +109,26 @@ sealed interface StrategyPlan {
         segments: List<ByteArray>,
         val splitOffset: Int,
     ) : StrategyPlan {
-        val segments: List<ByteArray> = segments.map(ByteArray::copyOf)
+        private val storedSegments: List<ByteArray> = segments.map(ByteArray::copyOf)
+
+        val segments: List<ByteArray>
+            get() = storedSegments.map(ByteArray::copyOf)
 
         init {
-            require(this.segments.size >= 2) { "A segmented plan requires at least two segments" }
-            require(this.segments.none { it.isEmpty() }) { "Segments must not be empty" }
+            require(storedSegments.size >= 2) {
+                "A segmented plan requires at least two segments"
+            }
+            require(storedSegments.none { it.isEmpty() }) {
+                "Segments must not be empty"
+            }
             require(splitOffset > 0) { "Split offset must be positive" }
         }
 
         fun reconstruct(): ByteArray {
-            val totalSize = segments.sumOf(ByteArray::size)
+            val totalSize = storedSegments.sumOf(ByteArray::size)
             val output = ByteArray(totalSize)
             var offset = 0
-            segments.forEach { segment ->
+            storedSegments.forEach { segment ->
                 segment.copyInto(output, destinationOffset = offset)
                 offset += segment.size
             }
