@@ -45,6 +45,7 @@ fun HomeScreen(
     onNativeUdpProbe: () -> Unit,
     onNativeDnsProbe: () -> Unit,
     onNativeTlsSplitProbe: () -> Unit,
+    onStrategyEvaluation: () -> Unit,
 ) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -204,10 +205,31 @@ fun HomeScreen(
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(
-                                text = if (uiState.strategyProbe.running) {
+                                text = if (
+                                    uiState.strategyProbe.running &&
+                                    uiState.mode == EngineMode.NATIVE_TLS_SPLIT_PROBE
+                                ) {
                                     "TLS write-split Lab выполняется"
                                 } else {
                                     "Проверить TLS write-split (Lab)"
+                                },
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onStrategyEvaluation,
+                            enabled = diagnosticsActionEnabled(uiState),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = if (
+                                    uiState.strategyProbe.running &&
+                                    uiState.mode == EngineMode.NATIVE_STRATEGY_EVALUATION
+                                ) {
+                                    "A/B/A evaluation выполняется"
+                                } else {
+                                    "Оценить strategy и rollback (Lab)"
                                 },
                                 textAlign = TextAlign.Center,
                             )
@@ -232,6 +254,7 @@ private fun statusTitle(uiState: ConnectionUiState): String = when (uiState.stat
         EngineMode.NATIVE_UDP_PROBE -> "Подготовка UDP probe"
         EngineMode.NATIVE_DNS_PROBE -> "Подготовка DNS probe"
         EngineMode.NATIVE_TLS_SPLIT_PROBE -> "Подготовка TLS write-split Lab"
+        EngineMode.NATIVE_STRATEGY_EVALUATION -> "Подготовка A/B/A strategy evaluation"
         EngineMode.FOUNDATION -> "Запуск сетевого ядра"
     }
 
@@ -241,6 +264,7 @@ private fun statusTitle(uiState: ConnectionUiState): String = when (uiState.stat
         EngineMode.NATIVE_UDP_PROBE -> "UDP-пакет проходит через TUN"
         EngineMode.NATIVE_DNS_PROBE -> "DNS-запрос проходит через TUN"
         EngineMode.NATIVE_TLS_SPLIT_PROBE -> "TLS write-split Lab проходит через TUN"
+        EngineMode.NATIVE_STRATEGY_EVALUATION -> "Baseline → strategy → recovery"
         EngineMode.FOUNDATION -> "Сетевое ядро готово"
     }
 
@@ -355,16 +379,49 @@ private fun diagnosticsText(uiState: ConnectionUiState): String {
         )
 
         false -> listOfNotNull(
-            uiState.strategyProbe.error?.let { "TLS write-split Lab: $it" },
+            uiState.strategyProbe.error?.let { "Strategy Lab: $it" },
         )
 
         null -> listOf(
             "Strategy lab: ${labStrategyDescriptor.id} · выключена вне явного Lab probe",
         )
     }
+    val evaluationDetails = listOfNotNull(
+        uiState.strategyProbe.evaluationDecision?.let { decision ->
+            "Evaluation: ${decisionTitle(decision)}"
+        },
+        uiState.strategyProbe.evaluationReason?.let { reason ->
+            "Причина: ${reasonTitle(reason)}"
+        },
+        phaseText(
+            title = "Baseline",
+            latency = uiState.strategyProbe.baselineLatencyMillis,
+            failure = uiState.strategyProbe.baselineFailure,
+        ),
+        phaseText(
+            title = "Strategy",
+            latency = uiState.strategyProbe.strategyLatencyMillis,
+            failure = uiState.strategyProbe.strategyFailure,
+        ),
+        phaseText(
+            title = "Recovery",
+            latency = uiState.strategyProbe.recoveryLatencyMillis,
+            failure = uiState.strategyProbe.recoveryFailure,
+        ),
+        uiState.strategyProbe.latencyDeltaMillis?.let { delta ->
+            val sign = if (delta > 0L) "+" else ""
+            "Latency delta: $sign$delta мс"
+        },
+        uiState.strategyProbe.allowedStrategyLatencyMillis?.let { allowed ->
+            "Допустимый strategy latency: до $allowed мс"
+        },
+        uiState.strategyProbe.gateState?.let { gate ->
+            "Session gate: ${gateTitle(gate)}"
+        },
+    )
 
     val safety =
-        "Lab проверяет два write() через 192.0.2.0/24; это не доказательство двух TCP-пакетов и не перехват обычного трафика."
+        "A/B/A Lab использует три отдельные TCP-сессии через 192.0.2.0/24. Результат проверяет lifecycle, байтовую целостность и rollback, но не доказывает обход DPI в реальной сети."
     return (
         listOf(availability) +
             nativeDetails +
@@ -372,8 +429,55 @@ private fun diagnosticsText(uiState: ConnectionUiState): String {
             udpProbeDetails +
             dnsProbeDetails +
             strategyDetails +
+            evaluationDetails +
             safety
         )
         .filter { it.isNotBlank() }
         .joinToString(separator = "\n")
+}
+
+private fun phaseText(title: String, latency: Long?, failure: String?): String? = when {
+    latency != null -> "$title: $latency мс"
+    failure != null -> "$title: ${failureTitle(failure)}"
+    else -> null
+}
+
+private fun decisionTitle(value: String): String = when (value) {
+    "KEEP_FOR_LAB_SESSION" -> "strategy разрешена только для текущей Lab-сессии"
+    "ROLLBACK_CONFIRMED" -> "rollback подтверждён"
+    "REJECT_BASELINE_UNHEALTHY" -> "baseline нездоров"
+    "REJECT_ENVIRONMENT_UNSTABLE" -> "окружение нестабильно"
+    "INCONCLUSIVE" -> "недостаточно данных"
+    else -> value
+}
+
+private fun reasonTitle(value: String): String = when (value) {
+    "PASSED_WITHIN_LATENCY_BUDGET" -> "strategy уложилась в latency budget"
+    "BASELINE_FAILURE_BUDGET_EXCEEDED" -> "baseline превысил лимит ошибок"
+    "BASELINE_SAMPLES_INSUFFICIENT" -> "недостаточно baseline samples"
+    "STRATEGY_FAILURE_BUDGET_EXCEEDED" -> "strategy превысила лимит ошибок"
+    "STRATEGY_SAMPLES_INSUFFICIENT" -> "недостаточно strategy samples"
+    "STRATEGY_LATENCY_REGRESSION" -> "слишком большая задержка strategy"
+    "RECOVERY_FAILURE_BUDGET_EXCEEDED" -> "recovery превысил лимит ошибок"
+    "RECOVERY_SAMPLES_INSUFFICIENT" -> "недостаточно recovery samples"
+    else -> value
+}
+
+private fun failureTitle(value: String): String = when (value) {
+    "TIMEOUT" -> "тайм-аут"
+    "CONNECTION_FAILED" -> "ошибка соединения"
+    "PAYLOAD_MISMATCH" -> "нарушена байтовая целостность"
+    "STRATEGY_REFUSED" -> "planner отказал"
+    "CANCELLED" -> "фаза отменена"
+    "INTERNAL_ERROR" -> "внутренняя ошибка"
+    else -> value
+}
+
+private fun gateTitle(value: String): String = when (value) {
+    "READY" -> "готов"
+    "EVALUATING" -> "evaluation выполняется"
+    "LAB_APPROVED" -> "разрешено в Lab-сессии"
+    "COOLDOWN" -> "cooldown после отката/ошибки"
+    "DISABLED" -> "отключено"
+    else -> value
 }
