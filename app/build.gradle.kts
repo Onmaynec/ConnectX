@@ -12,8 +12,8 @@ android {
         applicationId = "dev.connectx"
         minSdk = 29
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.2.0-alpha.5"
+        versionCode = 7
+        versionName = "0.2.0-alpha.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
