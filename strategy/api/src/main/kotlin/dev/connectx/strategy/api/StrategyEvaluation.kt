@@ -56,15 +56,39 @@ data class StrategyEvaluationPolicy(
     }
 }
 
-data class StrategyPhaseSummary(
+data class StrategyPhaseSummary internal constructor(
     val phase: StrategyHealthPhase,
     val successes: Int,
     val failures: Int,
     val medianLatencyMillis: Long?,
     val failureReasons: Map<StrategySampleFailure, Int>,
 ) {
+    init {
+        require(successes >= 0) { "Success count must not be negative" }
+        require(failures >= 0) { "Failure count must not be negative" }
+        require(successes + failures <= MAX_PHASE_SAMPLES) {
+            "A phase summary cannot exceed $MAX_PHASE_SAMPLES samples"
+        }
+        require((successes == 0) == (medianLatencyMillis == null)) {
+            "Median latency must exist exactly when successes exist"
+        }
+        require(medianLatencyMillis == null || medianLatencyMillis >= 0L) {
+            "Median latency must not be negative"
+        }
+        require(failureReasons.values.all { it > 0 }) {
+            "Failure reason counts must be positive"
+        }
+        require(failureReasons.values.sum() == failures) {
+            "Failure reason counts must equal total failures"
+        }
+    }
+
     val totalSamples: Int
         get() = successes + failures
+
+    private companion object {
+        const val MAX_PHASE_SAMPLES = 100
+    }
 }
 
 enum class StrategyEvaluationDecision {
@@ -86,7 +110,7 @@ enum class StrategyEvaluationReason {
     RECOVERY_SAMPLES_INSUFFICIENT,
 }
 
-data class StrategyEvaluationReport(
+data class StrategyEvaluationReport internal constructor(
     val strategyId: StrategyId,
     val baseline: StrategyPhaseSummary,
     val strategy: StrategyPhaseSummary,
@@ -95,7 +119,41 @@ data class StrategyEvaluationReport(
     val reason: StrategyEvaluationReason,
     val latencyDeltaMillis: Long?,
     val allowedStrategyLatencyMillis: Long?,
-)
+) {
+    init {
+        require(baseline.phase == StrategyHealthPhase.BASELINE) {
+            "Baseline summary must use BASELINE phase"
+        }
+        require(strategy.phase == StrategyHealthPhase.STRATEGY) {
+            "Strategy summary must use STRATEGY phase"
+        }
+        require(recovery.phase == StrategyHealthPhase.RECOVERY) {
+            "Recovery summary must use RECOVERY phase"
+        }
+        require(
+            (latencyDeltaMillis == null) ==
+                (allowedStrategyLatencyMillis == null),
+        ) {
+            "Latency delta and allowed latency must be present together"
+        }
+        require(allowedStrategyLatencyMillis == null || allowedStrategyLatencyMillis >= 0L) {
+            "Allowed strategy latency must not be negative"
+        }
+        require(
+            reason == StrategyEvaluationReason.PASSED_WITHIN_LATENCY_BUDGET ==
+                (decision == StrategyEvaluationDecision.KEEP_FOR_LAB_SESSION),
+        ) {
+            "Only a passed latency budget may keep a strategy for the Lab session"
+        }
+        require(
+            (reason == StrategyEvaluationReason.STRATEGY_LATENCY_REGRESSION) ==
+                (latencyDeltaMillis != null &&
+                    decision == StrategyEvaluationDecision.ROLLBACK_CONFIRMED),
+        ) {
+            "Latency regression reports must carry rollback latency evidence"
+        }
+    }
+}
 
 /**
  * Evaluates already-collected health samples. It never receives packet data,
