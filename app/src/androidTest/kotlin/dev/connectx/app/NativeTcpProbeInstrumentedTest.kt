@@ -84,7 +84,7 @@ class NativeTcpProbeInstrumentedTest {
                 result.getStringExtra(TunnelContract.EXTRA_NATIVE_VERSION).orEmpty(),
                 result.getStringExtra(TunnelContract.EXTRA_NATIVE_VERSION)
                     .orEmpty()
-                    .startsWith("connectx-go-bridge/0.2.0-alpha.4"),
+                    .startsWith("connectx-go-bridge/0.2.0-alpha.5"),
             )
             assertTrue(
                 result.getLongExtra(TunnelContract.EXTRA_PROBE_LATENCY_MILLIS, 0L) >= 1L,
