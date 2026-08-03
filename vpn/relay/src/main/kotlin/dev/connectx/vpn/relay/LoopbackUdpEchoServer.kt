@@ -90,6 +90,7 @@ class LoopbackUdpEchoServer(
             if (!packet.address.isLoopbackAddress || packet.length > maxPayloadBytes) {
                 continue
             }
+            UdpProbeTrace.onEchoReceived()
 
             try {
                 socket.send(
@@ -100,6 +101,7 @@ class LoopbackUdpEchoServer(
                         packet.socketAddress,
                     ),
                 )
+                UdpProbeTrace.onEchoSent()
             } catch (_: IOException) {
                 if (!running.get()) return
             }
