@@ -159,6 +159,44 @@ class MainActivity : ComponentActivity() {
                     ),
                 )
 
+                TunnelContract.STATUS_STRATEGY_PROBE_SUCCEEDED -> dispatch(
+                    ConnectionEvent.StrategyProbeCompleted(
+                        strategyId = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_STRATEGY_ID,
+                        ).orEmpty(),
+                        segments = statusIntent.getIntExtra(
+                            TunnelContract.EXTRA_STRATEGY_SEGMENTS,
+                            0,
+                        ),
+                        splitOffset = statusIntent.getIntExtra(
+                            TunnelContract.EXTRA_STRATEGY_SPLIT_OFFSET,
+                            0,
+                        ),
+                        latencyMillis = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_LATENCY_MILLIS,
+                            0L,
+                        ),
+                        uploadedBytes = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_UPLOADED_BYTES,
+                            0L,
+                        ),
+                        downloadedBytes = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_DOWNLOADED_BYTES,
+                            0L,
+                        ),
+                        relayConnections = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_RELAY_CONNECTIONS,
+                            0L,
+                        ),
+                        nativeVersion = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_NATIVE_VERSION,
+                        ),
+                        abi = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_NATIVE_ABI,
+                        ),
+                    ),
+                )
+
                 TunnelContract.STATUS_STOPPED -> dispatch(ConnectionEvent.TunnelStopped)
                 TunnelContract.STATUS_ERROR -> dispatch(
                     ConnectionEvent.Failed(
@@ -192,6 +230,9 @@ class MainActivity : ComponentActivity() {
                     },
                     onNativeDnsProbe = {
                         requestTunnelPermission(EngineMode.NATIVE_DNS_PROBE)
+                    },
+                    onNativeTlsSplitProbe = {
+                        requestTunnelPermission(EngineMode.NATIVE_TLS_SPLIT_PROBE)
                     },
                 )
             }
@@ -323,6 +364,7 @@ private fun EngineMode.toContractValue(): String = when (this) {
     EngineMode.NATIVE_TCP_PROBE -> TunnelContract.MODE_NATIVE_TCP_PROBE
     EngineMode.NATIVE_UDP_PROBE -> TunnelContract.MODE_NATIVE_UDP_PROBE
     EngineMode.NATIVE_DNS_PROBE -> TunnelContract.MODE_NATIVE_DNS_PROBE
+    EngineMode.NATIVE_TLS_SPLIT_PROBE -> TunnelContract.MODE_NATIVE_TLS_SPLIT_PROBE
 }
 
 private fun Intent.readEngineMode(): EngineMode = when (
@@ -332,5 +374,6 @@ private fun Intent.readEngineMode(): EngineMode = when (
     TunnelContract.MODE_NATIVE_TCP_PROBE -> EngineMode.NATIVE_TCP_PROBE
     TunnelContract.MODE_NATIVE_UDP_PROBE -> EngineMode.NATIVE_UDP_PROBE
     TunnelContract.MODE_NATIVE_DNS_PROBE -> EngineMode.NATIVE_DNS_PROBE
+    TunnelContract.MODE_NATIVE_TLS_SPLIT_PROBE -> EngineMode.NATIVE_TLS_SPLIT_PROBE
     else -> EngineMode.FOUNDATION
 }
