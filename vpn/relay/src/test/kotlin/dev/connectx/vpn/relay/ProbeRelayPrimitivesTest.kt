@@ -9,6 +9,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class ProbeRelayPrimitivesTest {
+    private val ipv4Loopback = InetAddress.getByName("127.0.0.1")
+
     @Test
     fun `exact override rewrites only reserved probe endpoint`() {
         val resolver = ExactRelayTargetOverride(
@@ -37,7 +39,7 @@ class ProbeRelayPrimitivesTest {
             val port = echoServer.start()
             val payload = "connectx-alpha4-probe".encodeToByteArray()
 
-            Socket(InetAddress.getLoopbackAddress(), port).use { socket ->
+            Socket(ipv4Loopback, port).use { socket ->
                 socket.soTimeout = 2_000
                 socket.getOutputStream().write(payload)
                 socket.getOutputStream().flush()
@@ -66,7 +68,7 @@ class ProbeRelayPrimitivesTest {
         )
 
         try {
-            Socket(InetAddress.getLoopbackAddress(), relay.start()).use { client ->
+            Socket(ipv4Loopback, relay.start()).use { client ->
                 client.soTimeout = 2_000
                 val input = DataInputStream(client.getInputStream())
                 val output = DataOutputStream(client.getOutputStream())
