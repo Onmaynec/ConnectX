@@ -138,8 +138,11 @@ internal object Socks5Protocol {
                 throw IOException("Некорректный порт назначения")
             }
 
-            COMMAND_UDP_ASSOCIATE -> if (port !in 0..65535) {
-                throw IOException("Некорректный порт UDP association")
+            COMMAND_UDP_ASSOCIATE -> {
+                if (port !in 0..65535) {
+                    throw IOException("Некорректный порт UDP association")
+                }
+                UdpProbeTrace.onAssociateRequest()
             }
 
             else -> throw UnsupportedCommandException(command)
@@ -174,12 +177,17 @@ internal object Socks5Protocol {
         output.writeByte((bindPort ushr 8) and 0xFF)
         output.writeByte(bindPort and 0xFF)
         output.flush()
+
+        if (replyCode == REPLY_SUCCEEDED && bindPort > 0) {
+            UdpProbeTrace.onAssociationReady()
+        }
     }
 
     fun decodeUdpDatagram(
         bytes: ByteArray,
         length: Int = bytes.size,
     ): Socks5UdpDatagram {
+        UdpProbeTrace.onRelayPacketReceived()
         if (length !in 4..bytes.size) {
             throw IOException("Некорректная длина SOCKS5 UDP datagram")
         }
