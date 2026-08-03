@@ -13,6 +13,7 @@ enum class EngineMode {
     FOUNDATION,
     NATIVE_SELF_TEST,
     NATIVE_TCP_PROBE,
+    NATIVE_UDP_PROBE,
 }
 
 data class NativeBridgeDiagnostics(
@@ -33,11 +34,23 @@ data class TcpProbeDiagnostics(
     val error: String? = null,
 )
 
+data class UdpProbeDiagnostics(
+    val running: Boolean = false,
+    val lastSuccess: Boolean? = null,
+    val latencyMillis: Long? = null,
+    val uploadedBytes: Long? = null,
+    val downloadedBytes: Long? = null,
+    val relayAssociations: Long? = null,
+    val datagrams: Long? = null,
+    val error: String? = null,
+)
+
 data class ConnectionUiState(
     val state: ConnectionState = ConnectionState.OFF,
     val mode: EngineMode = EngineMode.FOUNDATION,
     val diagnostics: NativeBridgeDiagnostics = NativeBridgeDiagnostics(),
     val probe: TcpProbeDiagnostics = TcpProbeDiagnostics(),
+    val udpProbe: UdpProbeDiagnostics = UdpProbeDiagnostics(),
     val errorMessage: String? = null,
 )
 
@@ -61,6 +74,16 @@ sealed interface ConnectionEvent {
         val uploadedBytes: Long,
         val downloadedBytes: Long,
         val relayConnections: Long,
+        val nativeVersion: String? = null,
+        val abi: String? = null,
+    ) : ConnectionEvent
+
+    data class UdpProbeCompleted(
+        val latencyMillis: Long,
+        val uploadedBytes: Long,
+        val downloadedBytes: Long,
+        val relayAssociations: Long,
+        val datagrams: Long,
         val nativeVersion: String? = null,
         val abi: String? = null,
     ) : ConnectionEvent
@@ -90,6 +113,10 @@ object ConnectionStateReducer {
                 running = event.mode == EngineMode.NATIVE_TCP_PROBE,
                 error = null,
             ),
+            udpProbe = current.udpProbe.copy(
+                running = event.mode == EngineMode.NATIVE_UDP_PROBE,
+                error = null,
+            ),
             errorMessage = null,
         )
 
@@ -107,6 +134,7 @@ object ConnectionStateReducer {
             state = ConnectionState.OFF,
             mode = EngineMode.FOUNDATION,
             probe = current.probe.copy(running = false),
+            udpProbe = current.udpProbe.copy(running = false),
             errorMessage = "Системное разрешение не предоставлено",
         )
 
@@ -121,11 +149,16 @@ object ConnectionStateReducer {
                 lastResult = when (event.mode) {
                     EngineMode.NATIVE_SELF_TEST -> "Native self-test запущен на TEST-NET"
                     EngineMode.NATIVE_TCP_PROBE -> "TCP probe проходит через TEST-NET TUN"
+                    EngineMode.NATIVE_UDP_PROBE -> "UDP probe проходит через TEST-NET TUN"
                     EngineMode.FOUNDATION -> current.diagnostics.lastResult
                 },
             ),
             probe = current.probe.copy(
                 running = event.mode == EngineMode.NATIVE_TCP_PROBE,
+                error = null,
+            ),
+            udpProbe = current.udpProbe.copy(
+                running = event.mode == EngineMode.NATIVE_UDP_PROBE,
                 error = null,
             ),
             errorMessage = null,
@@ -149,6 +182,30 @@ object ConnectionStateReducer {
                 downloadedBytes = event.downloadedBytes,
                 relayConnections = event.relayConnections,
             ),
+            udpProbe = current.udpProbe.copy(running = false),
+            errorMessage = null,
+        )
+
+        is ConnectionEvent.UdpProbeCompleted -> current.copy(
+            state = ConnectionState.OFF,
+            mode = EngineMode.FOUNDATION,
+            diagnostics = current.diagnostics.copy(
+                available = true,
+                version = event.nativeVersion ?: current.diagnostics.version,
+                abi = event.abi ?: current.diagnostics.abi,
+                running = false,
+                lastResult = "UDP-путь TUN → native stack → relay подтверждён",
+            ),
+            probe = current.probe.copy(running = false),
+            udpProbe = UdpProbeDiagnostics(
+                running = false,
+                lastSuccess = true,
+                latencyMillis = event.latencyMillis,
+                uploadedBytes = event.uploadedBytes,
+                downloadedBytes = event.downloadedBytes,
+                relayAssociations = event.relayAssociations,
+                datagrams = event.datagrams,
+            ),
             errorMessage = null,
         )
 
@@ -166,10 +223,12 @@ object ConnectionStateReducer {
                     EngineMode.NATIVE_SELF_TEST ->
                         "Native self-test остановлен без перехвата обычного трафика"
                     EngineMode.NATIVE_TCP_PROBE -> "TCP probe отменён и ресурсы закрыты"
+                    EngineMode.NATIVE_UDP_PROBE -> "UDP probe отменён и ресурсы закрыты"
                     EngineMode.FOUNDATION -> current.diagnostics.lastResult
                 },
             ),
             probe = current.probe.copy(running = false),
+            udpProbe = current.udpProbe.copy(running = false),
             errorMessage = null,
         )
 
@@ -197,6 +256,11 @@ object ConnectionStateReducer {
                 running = false,
                 lastSuccess = if (current.mode == EngineMode.NATIVE_TCP_PROBE) false else current.probe.lastSuccess,
                 error = if (current.mode == EngineMode.NATIVE_TCP_PROBE) event.message else current.probe.error,
+            ),
+            udpProbe = current.udpProbe.copy(
+                running = false,
+                lastSuccess = if (current.mode == EngineMode.NATIVE_UDP_PROBE) false else current.udpProbe.lastSuccess,
+                error = if (current.mode == EngineMode.NATIVE_UDP_PROBE) event.message else current.udpProbe.error,
             ),
             errorMessage = event.message,
         )

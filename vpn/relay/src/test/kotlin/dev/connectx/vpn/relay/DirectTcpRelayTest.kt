@@ -139,7 +139,7 @@ class DirectTcpRelayTest {
                 )
             }
 
-            assertTrue(relay.stats().failedConnections > 0)
+            assertTrue(awaitFailedConnections(relay).failedConnections > 0)
         } finally {
             relay.close()
         }
@@ -181,7 +181,7 @@ class DirectTcpRelayTest {
             }
 
             assertFalse(protectCalled.get())
-            assertTrue(relay.stats().failedConnections > 0)
+            assertTrue(awaitFailedConnections(relay).failedConnections > 0)
         } finally {
             relay.close()
         }
@@ -194,6 +194,16 @@ class DirectTcpRelayTest {
             (stats.uploadedBytes == 0L || stats.downloadedBytes == 0L) &&
             System.nanoTime() < deadline
         ) {
+            Thread.sleep(10)
+            stats = relay.stats()
+        }
+        return stats
+    }
+
+    private fun awaitFailedConnections(relay: DirectTcpRelay): RelayStats {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        var stats = relay.stats()
+        while (stats.failedConnections == 0L && System.nanoTime() < deadline) {
             Thread.sleep(10)
             stats = relay.stats()
         }

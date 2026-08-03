@@ -1,0 +1,304 @@
+name: Publish v0.2.0-alpha.5
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docs/releases/v0.2.0-alpha.5.publish
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout exact release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Go 1.26.3
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.3"
+          cache-dependency-path: |
+            engine/go/go.mod
+            engine/go/go.sum
+
+      - name: Install locked Android NDK
+        shell: bash
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;28.0.13004108"
+
+      - name: Verify and build locked native bridge
+        shell: bash
+        run: |
+          cd engine/go
+          go mod download
+          go mod verify
+          go test -mod=readonly ./bridge
+          git diff --exit-code -- go.mod go.sum
+          cd ../..
+          chmod +x engine/go/build-android.sh
+          engine/go/build-android.sh "$ANDROID_SDK_ROOT/ndk/28.0.13004108"
+          test -s engine/go/build/android/jniLibs/arm64-v8a/libconnectxbridge.so
+          test -s engine/go/build/android/jniLibs/x86_64/libconnectxbridge.so
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+
+      - name: Run JVM tests and lint
+        run: |
+          gradle test --no-daemon
+          gradle lintDebug --no-daemon
+
+      - name: Build and verify APK
+        shell: bash
+        run: |
+          gradle :app:assembleDebug --no-daemon
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | tee apk-contents.txt
+          grep -q 'lib/arm64-v8a/libconnectxbridge.so' apk-contents.txt
+          grep -q 'lib/x86_64/libconnectxbridge.so' apk-contents.txt
+          grep -q 'assets/THIRD_PARTY_NOTICES.md' apk-contents.txt
+          grep -q 'assets/tun2socks-MIT.txt' apk-contents.txt
+          grep -q 'assets/gvisor-LICENSE.txt' apk-contents.txt
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          cp app/build/outputs/apk/debug/app-debug.apk \
+            release-assets/ConnectX-v0.2.0-alpha.5-debug.apk
+          (cd engine/go/build/android && \
+            zip -r "$GITHUB_WORKSPACE/release-assets/ConnectX-v0.2.0-alpha.5-native.zip" .)
+          cp THIRD_PARTY_NOTICES.md \
+            release-assets/THIRD_PARTY_NOTICES-v0.2.0-alpha.5.md
+          cp licenses/tun2socks-MIT.txt release-assets/tun2socks-MIT.txt
+          cp licenses/gvisor-LICENSE.txt release-assets/gvisor-LICENSE.txt
+          (cd release-assets && sha256sum * > CHECKSUMS.txt)
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha5-release-assets-${{ github.sha }}
+          path: release-assets
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload native runtime payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha5-native-${{ github.sha }}
+          path: engine/go/build/android
+          if-no-files-found: error
+          retention-days: 14
+
+  android-runtime-smoke:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout exact release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Configure Android runtime paths
+        shell: bash
+        run: |
+          echo "ANDROID_AVD_HOME=$RUNNER_TEMP/connectx-release-avd" >> "$GITHUB_ENV"
+          echo "ANDROID_USER_HOME=$RUNNER_TEMP/connectx-release-android-user" >> "$GITHUB_ENV"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+
+      - name: Download verified native runtime payload
+        uses: actions/download-artifact@v4
+        with:
+          name: alpha5-native-${{ github.sha }}
+          path: engine/go/build/android
+
+      - name: Free runtime runner disk
+        shell: bash
+        run: |
+          sudo rm -rf "$ANDROID_SDK_ROOT/ndk" "$ANDROID_SDK_ROOT/cmake"
+          sudo rm -rf "$ANDROID_SDK_ROOT/system-images"
+          sudo rm -rf /opt/hostedtoolcache/go
+          sudo apt-get clean
+          df -h / | tee disk-after-cleanup.txt
+
+      - name: Verify KVM acceleration
+        shell: bash
+        run: |
+          test -e /dev/kvm
+          sudo chmod 666 /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
+
+      - name: Install Android emulator image
+        shell: bash
+        run: |
+          mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_USER_HOME"
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "emulator" \
+            "platforms;android-35" \
+            "system-images;android-35;google_apis;x86_64"
+          test -x "$ANDROID_SDK_ROOT/platform-tools/adb"
+          test -x "$ANDROID_SDK_ROOT/emulator/emulator"
+          "$ANDROID_SDK_ROOT/emulator/emulator" -accel-check | tee accel-check.txt
+          echo no | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" \
+            create avd \
+            --force \
+            --name connectx-alpha5-release \
+            --path "$ANDROID_AVD_HOME/connectx-alpha5-release.avd" \
+            --package "system-images;android-35;google_apis;x86_64"
+          "$ANDROID_SDK_ROOT/emulator/emulator" -list-avds | tee avd-list.txt
+          grep -qx 'connectx-alpha5-release' avd-list.txt
+          df -h / | tee disk-before-emulator.txt
+
+      - name: Start emulator and wait for Android
+        shell: bash
+        run: |
+          ADB="$ANDROID_SDK_ROOT/platform-tools/adb"
+          EMULATOR="$ANDROID_SDK_ROOT/emulator/emulator"
+          nohup "$EMULATOR" \
+            -avd connectx-alpha5-release \
+            -accel on \
+            -memory 2048 \
+            -no-window \
+            -noaudio \
+            -no-boot-anim \
+            -no-snapshot \
+            -no-snapshot-save \
+            -no-metrics \
+            -gpu swiftshader_indirect \
+            > emulator.log 2>&1 &
+          echo "$!" > emulator.pid
+
+          sleep 5
+          if ! kill -0 "$(cat emulator.pid)" 2>/dev/null; then
+            cat disk-before-emulator.txt 2>/dev/null || true
+            cat accel-check.txt 2>/dev/null || true
+            cat avd-list.txt 2>/dev/null || true
+            cat emulator.log
+            exit 1
+          fi
+
+          "$ADB" start-server
+          timeout 300 "$ADB" wait-for-device
+          DEADLINE=$((SECONDS + 300))
+          until [[ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; do
+            if ! kill -0 "$(cat emulator.pid)" 2>/dev/null; then
+              cat disk-before-emulator.txt 2>/dev/null || true
+              cat emulator.log
+              exit 1
+            fi
+            if (( SECONDS >= DEADLINE )); then
+              cat disk-before-emulator.txt 2>/dev/null || true
+              cat emulator.log
+              exit 1
+            fi
+            sleep 5
+          done
+          "$ADB" shell getprop ro.product.cpu.abi
+          "$ADB" shell getprop ro.build.version.sdk
+
+      - name: Run JNI and full VpnService TCP and UDP probe gates
+        run: |
+          gradle --no-daemon \
+            :vpn:nativebridge:connectedDebugAndroidTest \
+            :app:connectedDebugAndroidTest
+
+      - name: Collect emulator diagnostics
+        if: always()
+        shell: bash
+        run: |
+          ADB="$ANDROID_SDK_ROOT/platform-tools/adb"
+          mkdir -p emulator-diagnostics
+          cp emulator.log emulator-diagnostics/ 2>/dev/null || true
+          cp emulator.pid emulator-diagnostics/ 2>/dev/null || true
+          cp accel-check.txt emulator-diagnostics/ 2>/dev/null || true
+          cp avd-list.txt emulator-diagnostics/ 2>/dev/null || true
+          cp disk-after-cleanup.txt emulator-diagnostics/ 2>/dev/null || true
+          cp disk-before-emulator.txt emulator-diagnostics/ 2>/dev/null || true
+          timeout 10 "$ADB" devices -l > emulator-diagnostics/devices.txt 2>&1 || true
+          timeout 10 "$ADB" logcat -d > emulator-diagnostics/logcat.txt 2>&1 || true
+          cp -R vpn/nativebridge/build/reports/androidTests \
+            emulator-diagnostics/nativebridge-reports 2>/dev/null || true
+          cp -R vpn/nativebridge/build/outputs/androidTest-results \
+            emulator-diagnostics/nativebridge-results 2>/dev/null || true
+          cp -R app/build/reports/androidTests \
+            emulator-diagnostics/app-reports 2>/dev/null || true
+          cp -R app/build/outputs/androidTest-results \
+            emulator-diagnostics/app-results 2>/dev/null || true
+
+      - name: Upload emulator diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha5-emulator-smoke-${{ github.sha }}
+          path: emulator-diagnostics
+          if-no-files-found: warn
+          retention-days: 14
+
+  publish:
+    needs:
+      - verify
+      - android-runtime-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout release notes
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: alpha5-release-assets-${{ github.sha }}
+          path: release-assets
+
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: v0.2.0-alpha.5
+          TARGET_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release $TAG_NAME already exists; nothing to do."
+            exit 0
+          fi
+          gh release create "$TAG_NAME" \
+            release-assets/* \
+            --target "$TARGET_SHA" \
+            --title "ConnectX v0.2.0-alpha.5 — Bounded UDP Path Probe" \
+            --notes-file docs/releases/v0.2.0-alpha.5.md \
+            --prerelease

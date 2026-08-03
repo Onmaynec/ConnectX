@@ -85,6 +85,37 @@ class MainActivity : ComponentActivity() {
                     ),
                 )
 
+                TunnelContract.STATUS_UDP_PROBE_SUCCEEDED -> dispatch(
+                    ConnectionEvent.UdpProbeCompleted(
+                        latencyMillis = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_LATENCY_MILLIS,
+                            0L,
+                        ),
+                        uploadedBytes = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_UPLOADED_BYTES,
+                            0L,
+                        ),
+                        downloadedBytes = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_DOWNLOADED_BYTES,
+                            0L,
+                        ),
+                        relayAssociations = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_RELAY_ASSOCIATIONS,
+                            0L,
+                        ),
+                        datagrams = statusIntent.getLongExtra(
+                            TunnelContract.EXTRA_PROBE_DATAGRAMS,
+                            0L,
+                        ),
+                        nativeVersion = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_NATIVE_VERSION,
+                        ),
+                        abi = statusIntent.getStringExtra(
+                            TunnelContract.EXTRA_NATIVE_ABI,
+                        ),
+                    ),
+                )
+
                 TunnelContract.STATUS_STOPPED -> dispatch(ConnectionEvent.TunnelStopped)
                 TunnelContract.STATUS_ERROR -> dispatch(
                     ConnectionEvent.Failed(
@@ -112,6 +143,9 @@ class MainActivity : ComponentActivity() {
                     },
                     onNativeTcpProbe = {
                         requestTunnelPermission(EngineMode.NATIVE_TCP_PROBE)
+                    },
+                    onNativeUdpProbe = {
+                        requestTunnelPermission(EngineMode.NATIVE_UDP_PROBE)
                     },
                 )
             }
@@ -230,6 +264,7 @@ private fun EngineMode.toContractValue(): String = when (this) {
     EngineMode.FOUNDATION -> TunnelContract.MODE_FOUNDATION
     EngineMode.NATIVE_SELF_TEST -> TunnelContract.MODE_NATIVE_SELF_TEST
     EngineMode.NATIVE_TCP_PROBE -> TunnelContract.MODE_NATIVE_TCP_PROBE
+    EngineMode.NATIVE_UDP_PROBE -> TunnelContract.MODE_NATIVE_UDP_PROBE
 }
 
 private fun Intent.readEngineMode(): EngineMode = when (
@@ -237,5 +272,6 @@ private fun Intent.readEngineMode(): EngineMode = when (
 ) {
     TunnelContract.MODE_NATIVE_SELF_TEST -> EngineMode.NATIVE_SELF_TEST
     TunnelContract.MODE_NATIVE_TCP_PROBE -> EngineMode.NATIVE_TCP_PROBE
+    TunnelContract.MODE_NATIVE_UDP_PROBE -> EngineMode.NATIVE_UDP_PROBE
     else -> EngineMode.FOUNDATION
 }

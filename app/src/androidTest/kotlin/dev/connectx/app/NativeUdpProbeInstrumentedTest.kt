@@ -11,6 +11,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.connectx.vpn.api.TunnelContract
 import dev.connectx.vpn.nativebridge.NativeTunBridge
+import dev.connectx.vpn.relay.UdpProbeTrace
 import dev.connectx.vpn.service.ConnectXTunnelService
 import java.io.FileInputStream
 import java.util.concurrent.LinkedBlockingQueue
@@ -24,9 +25,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
-class NativeTcpProbeInstrumentedTest {
+class NativeUdpProbeInstrumentedTest {
     @Test
-    fun boundedProbeTraversesRealVpnTunNativeStackAndRelay() {
+    fun boundedUdpProbeTraversesRealVpnTunNativeStackAndAuthenticatedRelay() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val packageName = context.packageName
@@ -38,6 +39,7 @@ class NativeTcpProbeInstrumentedTest {
             }
         }
 
+        UdpProbeTrace.reset()
         ContextCompat.registerReceiver(
             context,
             receiver,
@@ -65,19 +67,28 @@ class NativeTcpProbeInstrumentedTest {
                 action = TunnelContract.ACTION_START
                 putExtra(
                     TunnelContract.EXTRA_ENGINE_MODE,
-                    TunnelContract.MODE_NATIVE_TCP_PROBE,
+                    TunnelContract.MODE_NATIVE_UDP_PROBE,
                 )
             }
             ContextCompat.startForegroundService(context, startIntent)
 
             val result = awaitTerminalStatus(statuses)
+            val trace = UdpProbeTrace.snapshot()
+            val nativeFlowTrace = NativeTunBridge.transportDiagnostics()
+            val failure = buildString {
+                append(result.getStringExtra(TunnelContract.EXTRA_ERROR))
+                append("; nativeTrace=")
+                append(nativeFlowTrace)
+                append("; udpTrace=")
+                append(trace)
+            }
             assertEquals(
-                result.getStringExtra(TunnelContract.EXTRA_ERROR),
-                TunnelContract.STATUS_PROBE_SUCCEEDED,
+                failure,
+                TunnelContract.STATUS_UDP_PROBE_SUCCEEDED,
                 result.getStringExtra(TunnelContract.EXTRA_STATUS),
             )
             assertEquals(
-                TunnelContract.MODE_NATIVE_TCP_PROBE,
+                TunnelContract.MODE_NATIVE_UDP_PROBE,
                 result.getStringExtra(TunnelContract.EXTRA_ENGINE_MODE),
             )
             assertTrue(
@@ -98,8 +109,18 @@ class NativeTcpProbeInstrumentedTest {
                     PROBE_PAYLOAD_BYTES,
             )
             assertTrue(
-                result.getLongExtra(TunnelContract.EXTRA_PROBE_RELAY_CONNECTIONS, 0L) >= 1L,
+                result.getLongExtra(TunnelContract.EXTRA_PROBE_RELAY_ASSOCIATIONS, 0L) >= 1L,
             )
+            assertTrue(
+                result.getLongExtra(TunnelContract.EXTRA_PROBE_DATAGRAMS, 0L) >= 1L,
+            )
+            assertTrue(trace.associateRequests >= 1L)
+            assertTrue(trace.associationsReady >= 1L)
+            assertTrue(trace.relayPacketsReceived >= 1L)
+            assertTrue(trace.resolvedDatagrams >= 1L)
+            assertTrue(trace.echoReceives >= 1L)
+            assertTrue(trace.echoSends >= 1L)
+            assertTrue(nativeFlowTrace.contains("udpFlows="))
             assertFalse(NativeTunBridge.isRunning())
         } finally {
             val stopIntent = Intent(context, ConnectXTunnelService::class.java).apply {
@@ -119,12 +140,12 @@ class NativeTcpProbeInstrumentedTest {
             val status = statuses.poll(remainingNanos, TimeUnit.NANOSECONDS)
                 ?: break
             when (status.getStringExtra(TunnelContract.EXTRA_STATUS)) {
-                TunnelContract.STATUS_PROBE_SUCCEEDED,
+                TunnelContract.STATUS_UDP_PROBE_SUCCEEDED,
                 TunnelContract.STATUS_ERROR,
                 -> return status
             }
         }
-        fail("Timed out waiting for terminal native TCP probe status")
+        fail("Timed out waiting for terminal native UDP probe status")
         error("unreachable")
     }
 
@@ -141,6 +162,6 @@ class NativeTcpProbeInstrumentedTest {
 
     private companion object {
         const val PROBE_PAYLOAD_BYTES = 64L
-        const val PROBE_TIMEOUT_SECONDS = 30L
+        const val PROBE_TIMEOUT_SECONDS = 40L
     }
 }

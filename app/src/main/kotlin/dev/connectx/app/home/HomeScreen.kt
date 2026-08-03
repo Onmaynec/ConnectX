@@ -38,6 +38,7 @@ fun HomeScreen(
     onToggle: () -> Unit,
     onNativeSelfTest: () -> Unit,
     onNativeTcpProbe: () -> Unit,
+    onNativeUdpProbe: () -> Unit,
 ) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -120,7 +121,7 @@ fun HomeScreen(
                 Box(modifier = Modifier.padding(20.dp)) {
                     Column {
                         Text(
-                            text = "Native diagnostics · v0.2.0-a4",
+                            text = "Native diagnostics · v0.2.0-a5",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -160,6 +161,21 @@ fun HomeScreen(
                                 textAlign = TextAlign.Center,
                             )
                         }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onNativeUdpProbe,
+                            enabled = diagnosticsActionEnabled(uiState),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = if (uiState.udpProbe.running) {
+                                    "UDP probe выполняется"
+                                } else {
+                                    "Проверить UDP-путь через TUN"
+                                },
+                                textAlign = TextAlign.Center,
+                            )
+                        }
                     }
                 }
             }
@@ -177,13 +193,15 @@ private fun statusTitle(uiState: ConnectionUiState): String = when (uiState.stat
     ConnectionState.STARTING -> when (uiState.mode) {
         EngineMode.NATIVE_SELF_TEST -> "Запуск native self-test"
         EngineMode.NATIVE_TCP_PROBE -> "Подготовка TCP probe"
-        EngineMode.FOUNDATION -> "Запуск TCP-ядра"
+        EngineMode.NATIVE_UDP_PROBE -> "Подготовка UDP probe"
+        EngineMode.FOUNDATION -> "Запуск сетевого ядра"
     }
 
     ConnectionState.LOCAL_TUN_ACTIVE -> when (uiState.mode) {
         EngineMode.NATIVE_SELF_TEST -> "Native self-test активен"
         EngineMode.NATIVE_TCP_PROBE -> "TCP-пакет проходит через TUN"
-        EngineMode.FOUNDATION -> "TCP-ядро готово"
+        EngineMode.NATIVE_UDP_PROBE -> "UDP-пакет проходит через TUN"
+        EngineMode.FOUNDATION -> "Сетевое ядро готово"
     }
 
     ConnectionState.STOPPING -> "Остановка"
@@ -214,26 +232,44 @@ private fun diagnosticsText(uiState: ConnectionUiState): String {
         diagnostics.abi?.let { "ABI: $it" },
         diagnostics.lastResult,
     )
-    val probeDetails = when (uiState.probe.lastSuccess) {
+    val tcpProbeDetails = when (uiState.probe.lastSuccess) {
         true -> listOfNotNull(
             uiState.probe.latencyMillis?.let { "TCP probe: ${it} мс" },
             if (
                 uiState.probe.uploadedBytes != null &&
                 uiState.probe.downloadedBytes != null
             ) {
-                "Relay: ↑${uiState.probe.uploadedBytes} Б · ↓${uiState.probe.downloadedBytes} Б"
+                "TCP relay: ↑${uiState.probe.uploadedBytes} Б · ↓${uiState.probe.downloadedBytes} Б"
             } else {
                 null
             },
-            uiState.probe.relayConnections?.let { "Соединения relay: $it" },
+            uiState.probe.relayConnections?.let { "TCP-соединения relay: $it" },
         )
 
         false -> listOfNotNull(uiState.probe.error?.let { "TCP probe: $it" })
         null -> emptyList()
     }
+    val udpProbeDetails = when (uiState.udpProbe.lastSuccess) {
+        true -> listOfNotNull(
+            uiState.udpProbe.latencyMillis?.let { "UDP probe: ${it} мс" },
+            if (
+                uiState.udpProbe.uploadedBytes != null &&
+                uiState.udpProbe.downloadedBytes != null
+            ) {
+                "UDP relay: ↑${uiState.udpProbe.uploadedBytes} Б · ↓${uiState.udpProbe.downloadedBytes} Б"
+            } else {
+                null
+            },
+            uiState.udpProbe.relayAssociations?.let { "UDP associations: $it" },
+            uiState.udpProbe.datagrams?.let { "UDP datagrams: $it" },
+        )
 
-    val safety = "Диагностика использует только 192.0.2.0/24 и не перехватывает обычный интернет-трафик."
-    return (listOf(availability) + nativeDetails + probeDetails + safety)
+        false -> listOfNotNull(uiState.udpProbe.error?.let { "UDP probe: $it" })
+        null -> emptyList()
+    }
+
+    val safety = "Диагностика использует только 192.0.2.0/24; DNS и обычный интернет-трафик не перехватываются."
+    return (listOf(availability) + nativeDetails + tcpProbeDetails + udpProbeDetails + safety)
         .filter { it.isNotBlank() }
         .joinToString(separator = "\n")
 }
