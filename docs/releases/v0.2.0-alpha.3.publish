@@ -1,0 +1,3 @@
+publish=v0.2.0-alpha.3
+reason=release workflow registration fix
+safety_route=192.0.2.0/24
