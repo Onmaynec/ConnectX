@@ -392,12 +392,18 @@ data class StrategySessionGate(
         }
     }
 
-    /** A new explicit user action may re-evaluate a previously approved lab session. */
+    /**
+     * A new explicit user action may re-evaluate an approved lab session or
+     * recover an EVALUATING state left behind after Android destroyed the
+     * service and its resources. Service code must close/check resources before
+     * invoking this method, so an active evaluation still enters cooldown.
+     */
     fun begin(nowElapsedMillis: Long): StrategySessionGate {
         val refreshed = refresh(nowElapsedMillis)
         check(
             refreshed.state == StrategySessionGateState.READY ||
-                refreshed.state == StrategySessionGateState.LAB_APPROVED,
+                refreshed.state == StrategySessionGateState.LAB_APPROVED ||
+                refreshed.state == StrategySessionGateState.EVALUATING,
         ) {
             "Strategy evaluation cannot start from ${refreshed.state}"
         }
