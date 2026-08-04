@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - main
+      - ci/runner-diagnostic-base
 
 permissions:
   contents: read
