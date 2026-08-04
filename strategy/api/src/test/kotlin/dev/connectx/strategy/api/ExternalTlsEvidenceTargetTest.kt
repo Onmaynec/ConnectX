@@ -82,6 +82,56 @@ class ExternalTlsEvidenceTargetTest {
     }
 
     @Test
+    fun resolvedBindingRequiresAlreadyCanonicalHostname() {
+        assertEquals(
+            TargetResolutionResult.Rejected(
+                TargetRejectionReason.INVALID_HOSTNAME_SYNTAX,
+            ),
+            ExternalTlsEvidenceTarget.bindResolvedAddresses(
+                normalizedHostname = "EXAMPLE.ORG",
+                addresses = listOf(ipv4("93.184.216.34")),
+            ),
+        )
+    }
+
+    @Test
+    fun literalBinderAcceptsOnlyCanonicalPublicIpv4() {
+        val result = ExternalTlsEvidenceTarget.bindResolvedIpv4Literal(
+            normalizedHostname = "example.org",
+            ipv4Literal = "93.184.216.34",
+        )
+
+        assertTrue(result is TargetResolutionResult.Valid)
+        val target = (result as TargetResolutionResult.Valid).target
+        assertEquals("example.org", target.hostname)
+        assertEquals("93.184.216.34", target.ipv4Address)
+        assertEquals(443, target.port)
+    }
+
+    @Test
+    fun literalBinderRejectsAmbiguousMalformedAndNonPublicValues() {
+        val cases = mapOf(
+            "093.184.216.34" to TargetRejectionReason.IPV4_REQUIRED,
+            "93.184.216" to TargetRejectionReason.IPV4_REQUIRED,
+            "93.184.216.256" to TargetRejectionReason.IPV4_REQUIRED,
+            "93.184.216.-1" to TargetRejectionReason.IPV4_REQUIRED,
+            "127.0.0.1" to TargetRejectionReason.NON_PUBLIC_ADDRESS,
+            "192.0.2.1" to TargetRejectionReason.NON_PUBLIC_ADDRESS,
+        )
+
+        cases.forEach { (literal, expected) ->
+            assertEquals(
+                "Unexpected literal binding result for $literal",
+                TargetResolutionResult.Rejected(expected),
+                ExternalTlsEvidenceTarget.bindResolvedIpv4Literal(
+                    normalizedHostname = "example.org",
+                    ipv4Literal = literal,
+                ),
+            )
+        }
+    }
+
+    @Test
     fun rejectsMixedPublicAndPrivateIpv4ToPreventRebinding() {
         val result = ExternalTlsEvidenceTarget.bindResolvedAddresses(
             normalizedHostname = "example.org",
