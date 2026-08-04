@@ -75,6 +75,9 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
 }
 
+log "Running standalone strategy core smoke gate"
+bash scripts/verify-strategy-core.sh
+
 ANDROID_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
 [[ -n "$ANDROID_ROOT" ]] || fail "Set ANDROID_SDK_ROOT or ANDROID_HOME"
 ANDROID_ROOT="$(cd -- "$ANDROID_ROOT" && pwd)"
