@@ -58,6 +58,24 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Manual TEST-NET-only A/B/A evaluation of a local strategy with rollback gate" />
         </service>
+
+        <service
+            android:name=".ConnectXExternalTlsEvidenceService"
+            android:exported="true"
+            android:foregroundServiceType="specialUse"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON"
+                android:value="false" />
+
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Manual one-host TCP 443 TLS evidence probe through a TEST-NET-only local TUN" />
+        </service>
     </application>
 
 </manifest>
