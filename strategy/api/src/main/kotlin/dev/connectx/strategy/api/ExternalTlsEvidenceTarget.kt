@@ -68,6 +68,15 @@ data class ExternalTlsEvidenceTarget private constructor(
             normalizedHostname: String,
             addresses: List<InetAddress>,
         ): TargetResolutionResult {
+            val validation = validateHostname(normalizedHostname)
+            if (
+                validation !is HostnameValidationResult.Valid ||
+                validation.normalizedHostname != normalizedHostname
+            ) {
+                return TargetResolutionResult.Rejected(
+                    TargetRejectionReason.INVALID_HOSTNAME_SYNTAX,
+                )
+            }
             if (addresses.isEmpty()) {
                 return TargetResolutionResult.Rejected(TargetRejectionReason.NO_RESOLVED_ADDRESS)
             }
