@@ -33,7 +33,7 @@ internal object TlsClientHelloInspector {
 
         val recordMajor = payload.u8(1)
         val recordMinor = payload.u8(2)
-        if (recordMajor != TLS_MAJOR_VERSION || recordMinor !in TLS_MINOR_VERSION_RANGE) {
+        if (recordMajor != TLS_MAJOR_VERSION || recordMinor !in TLS_LEGACY_MINOR_VERSION_RANGE) {
             return invalid(StrategyRefusalReason.NOT_TLS_HANDSHAKE)
         }
 
@@ -67,7 +67,7 @@ internal object TlsClientHelloInspector {
         }
         if (
             payload.u8(bodyStart) != TLS_MAJOR_VERSION ||
-            payload.u8(bodyStart + 1) !in TLS_MINOR_VERSION_RANGE
+            payload.u8(bodyStart + 1) !in TLS_LEGACY_MINOR_VERSION_RANGE
         ) {
             return invalid(StrategyRefusalReason.NOT_CLIENT_HELLO)
         }
@@ -162,7 +162,7 @@ internal object TlsClientHelloInspector {
 
     private const val TLS_CONTENT_TYPE_HANDSHAKE = 0x16
     private const val TLS_MAJOR_VERSION = 0x03
-    private val TLS_MINOR_VERSION_RANGE = 0x01..0x04
+    private val TLS_LEGACY_MINOR_VERSION_RANGE = 0x01..0x03
     private const val HANDSHAKE_TYPE_CLIENT_HELLO = 0x01
 
     private const val SESSION_ID_LENGTH_BYTES = 1
