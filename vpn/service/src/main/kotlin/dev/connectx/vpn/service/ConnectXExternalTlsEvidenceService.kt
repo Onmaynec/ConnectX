@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
@@ -58,16 +59,20 @@ import kotlin.math.max
  * Manual one-host TLS evidence probe for a restricted network.
  *
  * Only an exact TEST-NET socket enters the local TUN. The authenticated relay
- * rewrites that one endpoint to one public IPv4 selected before TUN startup and
- * protects the outbound socket through [VpnService.protect]. The service sends
- * one locally generated ClientHello per phase and reads only a five-byte TLS
- * record header. It never sends an HTTP request or decrypts HTTPS content.
+ * rewrites that endpoint to one pinned destination and protects the outbound
+ * socket through [VpnService.protect]. Production resolves one public IPv4
+ * exactly once and always uses TCP/443. A debuggable APK may instead use an
+ * explicit loopback responder for deterministic Android instrumentation.
+ *
+ * The service sends one locally generated ClientHello per phase and reads only
+ * a five-byte TLS record header. It never sends HTTP or decrypts HTTPS content.
  */
 class ConnectXExternalTlsEvidenceService : VpnService() {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var tunnelDescriptor: ParcelFileDescriptor? = null
     private var relay: DirectTcpRelay? = null
+    private var relayCredentials: Socks5Credentials? = null
     private var nativeSession: NativeTunSession? = null
 
     @Volatile
@@ -75,6 +80,9 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
 
     @Volatile
     private var generation: Long = 0L
+
+    @Volatile
+    private var gateGeneration: Long? = null
 
     private var evidenceThread: Thread? = null
     private var nativeVersion: String? = null
@@ -88,9 +96,22 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         when (intent?.action) {
             TunnelContract.ACTION_STOP -> stopEvidenceAndService()
             TunnelContract.ACTION_START, null -> startEvidence(
-                rawHostname = intent
-                    ?.getStringExtra(TunnelContract.EXTRA_EVIDENCE_HOSTNAME)
-                    .orEmpty(),
+                EvidenceRequest(
+                    rawHostname = intent
+                        ?.getStringExtra(TunnelContract.EXTRA_EVIDENCE_HOSTNAME)
+                        .orEmpty(),
+                    testResolvedIpv4 = intent?.getStringExtra(
+                        TunnelContract.EXTRA_EVIDENCE_TEST_RESOLVED_IPV4,
+                    ),
+                    testLoopbackPort = intent
+                        ?.takeIf {
+                            it.hasExtra(TunnelContract.EXTRA_EVIDENCE_TEST_LOOPBACK_PORT)
+                        }
+                        ?.getIntExtra(
+                            TunnelContract.EXTRA_EVIDENCE_TEST_LOOPBACK_PORT,
+                            -1,
+                        ),
+                ),
             )
         }
         return START_NOT_STICKY
@@ -107,9 +128,10 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         super.onDestroy()
     }
 
-    private fun startEvidence(rawHostname: String) {
+    private fun startEvidence(request: EvidenceRequest) {
         promoteToForeground()
         if (hasActiveResources()) {
+            if (gateGeneration != null) enterCooldownAfterFailure()
             closeResources()
         }
 
@@ -120,7 +142,7 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
                 val outcome = runCatching {
                     executeEvidence(
                         expectedGeneration = evidenceGeneration,
-                        rawHostname = rawHostname,
+                        request = request,
                     )
                 }
                 mainHandler.post {
@@ -135,48 +157,31 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
 
     private fun executeEvidence(
         expectedGeneration: Long,
-        rawHostname: String,
+        request: EvidenceRequest,
     ): ExternalTlsEvidenceResult {
         checkGeneration(expectedGeneration)
-        beginSessionGate()
 
         val normalizedHostname = when (
-            val validation = ExternalTlsEvidenceTarget.validateHostname(rawHostname)
+            val validation = ExternalTlsEvidenceTarget.validateHostname(request.rawHostname)
         ) {
             is HostnameValidationResult.Valid -> validation.normalizedHostname
-            is HostnameValidationResult.Rejected -> throw EvidenceSetupException(
+            is HostnameValidationResult.Rejected -> throw EvidenceInputException(
                 "Hostname отклонён политикой безопасности: ${validation.reason.name}",
             )
         }
-
-        checkGeneration(expectedGeneration)
-        val resolvedAddresses = try {
-            InetAddress.getAllByName(normalizedHostname).toList()
-        } catch (_: UnknownHostException) {
-            throw EvidenceSetupException("DNS не вернул адрес для указанного hostname")
-        } catch (_: SecurityException) {
-            throw EvidenceSetupException("Системная DNS-проверка запрещена")
-        }
-        val target = when (
-            val resolution = ExternalTlsEvidenceTarget.bindResolvedAddresses(
-                normalizedHostname = normalizedHostname,
-                addresses = resolvedAddresses,
-            )
-        ) {
-            is TargetResolutionResult.Valid -> resolution.target
-            is TargetResolutionResult.Rejected -> throw EvidenceSetupException(
-                "Resolved target отклонён политикой безопасности: ${resolution.reason.name}",
-            )
-        }
-
+        val destination = resolveDestination(
+            normalizedHostname = normalizedHostname,
+            request = request,
+        )
         val payload = when (
             val creation = TlsClientHelloFactory.create(normalizedHostname)
         ) {
             is TlsClientHelloCreationResult.Created -> creation.payload
-            is TlsClientHelloCreationResult.Rejected -> throw EvidenceSetupException(
+            is TlsClientHelloCreationResult.Rejected -> throw EvidenceInputException(
                 "TLS ClientHello не создан: ${creation.reason.name}",
             )
         }
+
         val strategy = TlsClientHelloSplitStrategy()
         val plan = strategy.plan(
             payload = payload,
@@ -199,7 +204,8 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         }
 
         checkGeneration(expectedGeneration)
-        val relayPort = startExactRelay(target)
+        beginSessionGate(expectedGeneration)
+        val relayPort = startExactRelay(destination.relayTarget)
         val tunnel = establishTestTunnel()
         tunnelDescriptor = tunnel
         val version = startNativeSession(
@@ -211,7 +217,7 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         publishStatus(
             status = TunnelContract.STATUS_STARTED,
             nativeVersion = version,
-            target = target,
+            target = destination.displayTarget,
         )
 
         Thread.sleep(ROUTE_SETTLE_MILLIS)
@@ -259,9 +265,10 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
             )
             processGate
         }
+        gateGeneration = null
 
         return ExternalTlsEvidenceResult(
-            target = target,
+            target = destination.displayTarget,
             report = report,
             gate = gate,
             segments = plan.segments.size,
@@ -272,23 +279,79 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         )
     }
 
-    private fun beginSessionGate() {
+    private fun resolveDestination(
+        normalizedHostname: String,
+        request: EvidenceRequest,
+    ): EvidenceDestination {
+        val testIpv4 = request.testResolvedIpv4
+        val testPort = request.testLoopbackPort
+        val hasTestOverride = testIpv4 != null || testPort != null
+        if (hasTestOverride) {
+            if (!isApplicationDebuggable()) {
+                throw EvidenceInputException("Test-only evidence override запрещён в release APK")
+            }
+            if (testIpv4.isNullOrBlank() || testPort !in 1..65535) {
+                throw EvidenceInputException("Test-only evidence override неполный")
+            }
+            val displayTarget = when (
+                val result = ExternalTlsEvidenceTarget.bindResolvedIpv4Literal(
+                    normalizedHostname = normalizedHostname,
+                    ipv4Literal = testIpv4,
+                )
+            ) {
+                is TargetResolutionResult.Valid -> result.target
+                is TargetResolutionResult.Rejected -> throw EvidenceInputException(
+                    "Test target отклонён политикой безопасности: ${result.reason.name}",
+                )
+            }
+            return EvidenceDestination(
+                displayTarget = displayTarget,
+                relayTarget = RelayTarget(RELAY_HOST, testPort),
+            )
+        }
+
+        val resolvedAddresses = try {
+            InetAddress.getAllByName(normalizedHostname).toList()
+        } catch (_: UnknownHostException) {
+            throw EvidenceInputException("DNS не вернул адрес для указанного hostname")
+        } catch (_: SecurityException) {
+            throw EvidenceInputException("Системная DNS-проверка запрещена")
+        }
+        val displayTarget = when (
+            val resolution = ExternalTlsEvidenceTarget.bindResolvedAddresses(
+                normalizedHostname = normalizedHostname,
+                addresses = resolvedAddresses,
+            )
+        ) {
+            is TargetResolutionResult.Valid -> resolution.target
+            is TargetResolutionResult.Rejected -> throw EvidenceInputException(
+                "Resolved target отклонён политикой безопасности: ${resolution.reason.name}",
+            )
+        }
+        return EvidenceDestination(
+            displayTarget = displayTarget,
+            relayTarget = RelayTarget(
+                host = displayTarget.ipv4Address,
+                port = displayTarget.port,
+            ),
+        )
+    }
+
+    private fun beginSessionGate(expectedGeneration: Long) {
         val now = SystemClock.elapsedRealtime()
         synchronized(GATE_LOCK) {
             processGate = processGate.begin(now)
         }
+        gateGeneration = expectedGeneration
     }
 
-    private fun startExactRelay(target: ExternalTlsEvidenceTarget): Int {
+    private fun startExactRelay(destination: RelayTarget): Int {
         val credentials = Socks5Credentials.random()
         val targetResolver = RelayTargetResolver { host, port ->
             check(host == EVIDENCE_TEST_HOST && port == EVIDENCE_TEST_PORT) {
                 "SOCKS target находится вне exact evidence allow-list"
             }
-            RelayTarget(
-                host = target.ipv4Address,
-                port = target.port,
-            )
+            destination
         }
         val localRelay = DirectTcpRelay(
             socketProtector = SocketProtector { socket -> protect(socket) },
@@ -303,8 +366,6 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         relayCredentials = credentials
         return relayPort
     }
-
-    private var relayCredentials: Socks5Credentials? = null
 
     private fun establishTestTunnel(): ParcelFileDescriptor = Builder()
         .setSession("ConnectX v0.3 external TLS evidence")
@@ -389,7 +450,7 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         writeGapMillis: Long,
     ): EvidenceExchangeResult {
         require(segments.isNotEmpty()) { "Evidence exchange requires at least one segment" }
-        require(segments.none(ByteArray::isEmpty)) {
+        require(segments.none { it.isEmpty() }) {
             "Evidence exchange segments must not be empty"
         }
         val reconstructed = ByteArray(segments.sumOf(ByteArray::size))
@@ -413,8 +474,6 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         try {
             socket.tcpNoDelay = true
             socket.soTimeout = PHASE_TIMEOUT_MILLIS
-            // Intentionally unprotected: only this exact TEST-NET endpoint must
-            // enter Android TUN. The relay's real outbound socket is protected.
             socket.connect(
                 InetSocketAddress(EVIDENCE_TEST_HOST, EVIDENCE_TEST_PORT),
                 PHASE_TIMEOUT_MILLIS,
@@ -542,6 +601,7 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         if (evidenceGeneration != generation) return
 
         val completedVersion = nativeVersion
+        val shouldCooldown = gateGeneration == evidenceGeneration
         val cleanupError = closeResources()
         val result = outcome.getOrNull()
         if (result != null && cleanupError == null) {
@@ -552,7 +612,8 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
                 result = result,
             )
         } else {
-            enterCooldownAfterFailure()
+            if (shouldCooldown) enterCooldownAfterFailure()
+            gateGeneration = null
             val primary = outcome.exceptionOrNull()
                 ?: IllegalStateException(
                     "External TLS evidence завершена, но ресурсы закрылись с ошибкой",
@@ -568,9 +629,8 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
     }
 
     private fun stopEvidenceAndService() {
-        if (shouldEnterCooldownOnStop()) {
-            enterCooldownAfterFailure()
-        }
+        if (gateGeneration != null) enterCooldownAfterFailure()
+        gateGeneration = null
         val cleanupError = closeResources()
         if (cleanupError == null) {
             publishStatus(status = TunnelContract.STATUS_STOPPED)
@@ -585,11 +645,6 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         stopSelf()
     }
 
-    private fun shouldEnterCooldownOnStop(): Boolean =
-        hasActiveResources() || synchronized(GATE_LOCK) {
-            processGate.state == StrategySessionGateState.EVALUATING
-        }
-
     private fun enterCooldownAfterFailure() {
         val now = SystemClock.elapsedRealtime()
         synchronized(GATE_LOCK) {
@@ -601,10 +656,7 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
                         .resetApprovedSession()
                         .begin(now)
                         .abort(now, EVALUATION_POLICY)
-                StrategySessionGateState.READY ->
-                    processGate
-                        .begin(now)
-                        .abort(now, EVALUATION_POLICY)
+                StrategySessionGateState.READY -> processGate
                 StrategySessionGateState.COOLDOWN,
                 StrategySessionGateState.DISABLED,
                 -> processGate
@@ -801,6 +853,9 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
             .createNotificationChannel(channel)
     }
 
+    private fun isApplicationDebuggable(): Boolean =
+        applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+
     private fun elapsedMillisSince(startedAtNanos: Long): Long = max(
         1L,
         (SystemClock.elapsedRealtimeNanos() - startedAtNanos) / NANOS_PER_MILLISECOND,
@@ -816,6 +871,17 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
     }
 
     private fun currentAbi(): String = Build.SUPPORTED_ABIS.firstOrNull() ?: Build.CPU_ABI
+
+    private data class EvidenceRequest(
+        val rawHostname: String,
+        val testResolvedIpv4: String?,
+        val testLoopbackPort: Int?,
+    )
+
+    private data class EvidenceDestination(
+        val displayTarget: ExternalTlsEvidenceTarget,
+        val relayTarget: RelayTarget,
+    )
 
     private data class EvidenceExchangeResult(
         val latencyMillis: Long,
@@ -856,7 +922,7 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
             get() = baseline.relayConnections + strategy.relayConnections + recovery.relayConnections
     }
 
-    private class EvidenceSetupException(message: String) : IOException(message)
+    private class EvidenceInputException(message: String) : IOException(message)
     private class InvalidTlsPrefixException(message: String) : IOException(message)
 
     private companion object {
