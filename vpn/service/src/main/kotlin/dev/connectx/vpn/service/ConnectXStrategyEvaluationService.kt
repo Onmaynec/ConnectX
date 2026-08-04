@@ -14,6 +14,7 @@ import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import dev.connectx.strategy.api.ApplicationProtocol
+import dev.connectx.strategy.api.LabTlsClientHello
 import dev.connectx.strategy.api.NetworkProtocol
 import dev.connectx.strategy.api.StrategyContext
 import dev.connectx.strategy.api.StrategyEvaluationPolicy
@@ -587,27 +588,9 @@ class ConnectXStrategyEvaluationService : VpnService() {
             activeSocket != null
 
     private fun buildSyntheticClientHello(): ByteArray {
-        val body = ByteArray(TLS_CLIENT_HELLO_BODY_BYTES)
-        secureRandom.nextBytes(body)
-        body[0] = 0x03
-        body[1] = 0x03
-        body[body.lastIndex] = 0
-
-        val handshake = ByteArray(TLS_HANDSHAKE_HEADER_BYTES + body.size)
-        handshake[0] = 0x01
-        handshake[1] = ((body.size ushr 16) and 0xff).toByte()
-        handshake[2] = ((body.size ushr 8) and 0xff).toByte()
-        handshake[3] = (body.size and 0xff).toByte()
-        body.copyInto(handshake, destinationOffset = TLS_HANDSHAKE_HEADER_BYTES)
-
-        return ByteArray(TLS_RECORD_HEADER_BYTES + handshake.size).also { record ->
-            record[0] = 0x16
-            record[1] = 0x03
-            record[2] = 0x03
-            record[3] = ((handshake.size ushr 8) and 0xff).toByte()
-            record[4] = (handshake.size and 0xff).toByte()
-            handshake.copyInto(record, destinationOffset = TLS_RECORD_HEADER_BYTES)
-        }
+        val randomBytes = ByteArray(LabTlsClientHello.RANDOM_BYTES)
+            .also(secureRandom::nextBytes)
+        return LabTlsClientHello.create(randomBytes)
     }
 
     private fun publishStatus(
@@ -823,8 +806,5 @@ class ConnectXStrategyEvaluationService : VpnService() {
         const val STATS_TIMEOUT_MILLIS = 1_000L
         const val STATS_POLL_MILLIS = 10L
         const val NANOS_PER_MILLISECOND = 1_000_000L
-        const val TLS_RECORD_HEADER_BYTES = 5
-        const val TLS_HANDSHAKE_HEADER_BYTES = 4
-        const val TLS_CLIENT_HELLO_BODY_BYTES = 35
     }
 }
