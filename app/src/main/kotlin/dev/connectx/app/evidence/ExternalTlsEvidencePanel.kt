@@ -1,9 +1,9 @@
 package dev.connectx.app.evidence
 
+import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
@@ -16,8 +16,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -56,6 +56,28 @@ data class ExternalTlsEvidenceUiState(
             ExternalTlsEvidenceStatus.RUNNING,
             ExternalTlsEvidenceStatus.STOPPING,
         )
+
+    val canExportRedactedReport: Boolean
+        get() = status == ExternalTlsEvidenceStatus.COMPLETED &&
+            decision != null &&
+            reason != null
+
+    fun redactedReportText(): String = buildString {
+        appendLine("ConnectX v0.3.0-alpha.3 — TLS Evidence Lab")
+        appendLine("target=redacted-public-host:${targetPort ?: 443}")
+        appendLine("route=TEST-NET-only")
+        appendLine("transport=TCP")
+        appendLine("tls_payload=ClientHello-only")
+        appendLine("baseline=${phaseReport(baselineLatencyMillis, baselineRecordKind)}")
+        appendLine("strategy=${phaseReport(strategyLatencyMillis, strategyRecordKind)}")
+        appendLine("recovery=${phaseReport(recoveryLatencyMillis, recoveryRecordKind)}")
+        appendLine("decision=${decision ?: "UNKNOWN"}")
+        appendLine("reason=${reason ?: "UNKNOWN"}")
+        appendLine("gate=${gateState ?: "UNKNOWN"}")
+        appendLine("hostname=REDACTED")
+        appendLine("resolved_ipv4=REDACTED")
+        append("claim=network-specific-lab-evidence-not-universal-bypass")
+    }
 }
 
 @Composable
@@ -68,6 +90,7 @@ fun ExternalTlsEvidencePanel(
     modifier: Modifier = Modifier,
 ) {
     var dialogOpen by rememberSaveable { mutableStateOf(false) }
+    val context = LocalContext.current
 
     LaunchedEffect(state.status) {
         if (
@@ -142,6 +165,26 @@ fun ExternalTlsEvidencePanel(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+
+                if (state.canExportRedactedReport) {
+                    OutlinedButton(
+                        onClick = {
+                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, state.redactedReportText())
+                            }
+                            context.startActivity(
+                                Intent.createChooser(
+                                    shareIntent,
+                                    "Поделиться обезличенным отчётом",
+                                ),
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Поделиться обезличенным отчётом")
+                    }
                 }
 
                 Text(
@@ -229,3 +272,10 @@ private fun phaseLine(
         recordKind,
     ).joinToString(" · ")
 }
+
+private fun phaseReport(latencyMillis: Long?, recordKind: String?): String =
+    listOfNotNull(
+        latencyMillis?.let { "latency_ms=$it" },
+        recordKind?.let { "record=$it" },
+    ).ifEmpty { listOf("not_available") }
+        .joinToString(",")
