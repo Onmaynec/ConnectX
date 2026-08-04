@@ -17,6 +17,7 @@ import dev.connectx.strategy.api.TlsRecordKind
 import dev.connectx.vpn.api.TunnelContract
 import dev.connectx.vpn.nativebridge.NativeTunBridge
 import dev.connectx.vpn.relay.LoopbackTlsEvidenceServer
+import dev.connectx.vpn.relay.LoopbackTlsEvidenceStats
 import dev.connectx.vpn.service.ConnectXExternalTlsEvidenceService
 import java.io.FileInputStream
 import java.util.concurrent.LinkedBlockingQueue
@@ -32,7 +33,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ExternalTlsEvidenceInstrumentedTest {
     @Test
-    fun debuggableEvidencePathTraversesRealTunAndReadsOnlyTlsHeaders() {
+    fun debuggableEvidencePathTraversesRealTunAndAllowsNextExplicitSession() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val packageName = context.packageName
@@ -79,123 +80,31 @@ class ExternalTlsEvidenceInstrumentedTest {
                     responderPort = responderPort,
                 ),
             )
+            val first = awaitTerminalStatus(statuses)
+            assertSuccessfulEvidenceResult(
+                result = first,
+                responder = responder,
+                expectedTotalConnections = CONNECTIONS_PER_SESSION,
+            )
+            assertFalse(NativeTunBridge.isRunning())
 
-            val result = awaitTerminalStatus(statuses)
-            val nativeTrace = NativeTunBridge.transportDiagnostics()
-            val failure = buildString {
-                append(result.getStringExtra(TunnelContract.EXTRA_ERROR))
-                append("; nativeTrace=")
-                append(nativeTrace)
-                append("; responder=")
-                append(responder.stats())
-            }
-            assertEquals(
-                failure,
-                TunnelContract.STATUS_EXTERNAL_TLS_EVIDENCE_COMPLETED,
-                result.getStringExtra(TunnelContract.EXTRA_STATUS),
-            )
-            assertEquals(
-                TunnelContract.MODE_NATIVE_EXTERNAL_TLS_EVIDENCE,
-                result.getStringExtra(TunnelContract.EXTRA_ENGINE_MODE),
-            )
-            assertEquals(
-                TEST_HOSTNAME,
-                result.getStringExtra(TunnelContract.EXTRA_EVIDENCE_HOSTNAME),
-            )
-            assertEquals(
-                TEST_PUBLIC_IPV4,
-                result.getStringExtra(TunnelContract.EXTRA_EVIDENCE_RESOLVED_IPV4),
-            )
-            assertEquals(
-                443,
-                result.getIntExtra(TunnelContract.EXTRA_EVIDENCE_TARGET_PORT, 0),
-            )
-            assertEquals(
-                TlsClientHelloSplitStrategy.ID.value,
-                result.getStringExtra(TunnelContract.EXTRA_STRATEGY_ID),
-            )
-            assertEquals(
-                2,
-                result.getIntExtra(TunnelContract.EXTRA_STRATEGY_SEGMENTS, 0),
-            )
-            assertEquals(
-                EXPECTED_SPLIT_OFFSET,
-                result.getIntExtra(TunnelContract.EXTRA_STRATEGY_SPLIT_OFFSET, 0),
-            )
-            assertEquals(
-                StrategyEvaluationDecision.KEEP_FOR_LAB_SESSION.name,
-                result.getStringExtra(TunnelContract.EXTRA_STRATEGY_DECISION),
-            )
-            assertEquals(
-                StrategyEvaluationReason.PASSED_WITHIN_LATENCY_BUDGET.name,
-                result.getStringExtra(TunnelContract.EXTRA_STRATEGY_REASON),
-            )
-            assertEquals(
-                StrategySessionGateState.LAB_APPROVED.name,
-                result.getStringExtra(TunnelContract.EXTRA_STRATEGY_GATE_STATE),
-            )
-            assertEquals(
-                TlsRecordKind.ALERT.name,
-                result.getStringExtra(
-                    TunnelContract.EXTRA_EVIDENCE_BASELINE_RECORD_KIND,
+            // LAB_APPROVED is scoped to the completed attempt. A second explicit
+            // user action must create a new bounded session without a fake
+            // cooldown or leaked TUN/native resource from the first attempt.
+            ContextCompat.startForegroundService(
+                context,
+                evidenceServiceIntent(
+                    context = context,
+                    action = TunnelContract.ACTION_START,
+                    responderPort = responderPort,
                 ),
             )
-            assertEquals(
-                TlsRecordKind.ALERT.name,
-                result.getStringExtra(
-                    TunnelContract.EXTRA_EVIDENCE_STRATEGY_RECORD_KIND,
-                ),
+            val second = awaitTerminalStatus(statuses)
+            assertSuccessfulEvidenceResult(
+                result = second,
+                responder = responder,
+                expectedTotalConnections = CONNECTIONS_PER_SESSION * 2L,
             )
-            assertEquals(
-                TlsRecordKind.ALERT.name,
-                result.getStringExtra(
-                    TunnelContract.EXTRA_EVIDENCE_RECOVERY_RECORD_KIND,
-                ),
-            )
-            assertTrue(
-                result.getLongExtra(
-                    TunnelContract.EXTRA_STRATEGY_BASELINE_LATENCY_MILLIS,
-                    -1L,
-                ) >= 1L,
-            )
-            assertTrue(
-                result.getLongExtra(
-                    TunnelContract.EXTRA_STRATEGY_LATENCY_MILLIS,
-                    -1L,
-                ) >= 1L,
-            )
-            assertTrue(
-                result.getLongExtra(
-                    TunnelContract.EXTRA_STRATEGY_RECOVERY_LATENCY_MILLIS,
-                    -1L,
-                ) >= 1L,
-            )
-            assertNull(
-                result.getStringExtra(TunnelContract.EXTRA_STRATEGY_BASELINE_FAILURE),
-            )
-            assertNull(
-                result.getStringExtra(TunnelContract.EXTRA_STRATEGY_PHASE_FAILURE),
-            )
-            assertNull(
-                result.getStringExtra(TunnelContract.EXTRA_STRATEGY_RECOVERY_FAILURE),
-            )
-            assertTrue(
-                result.getLongExtra(TunnelContract.EXTRA_PROBE_UPLOADED_BYTES, 0L) > 0L,
-            )
-            assertTrue(
-                result.getLongExtra(TunnelContract.EXTRA_PROBE_DOWNLOADED_BYTES, 0L) >=
-                    TLS_HEADER_BYTES * EXPECTED_CONNECTIONS,
-            )
-            assertTrue(
-                result.getLongExtra(TunnelContract.EXTRA_PROBE_RELAY_CONNECTIONS, 0L) >=
-                    EXPECTED_CONNECTIONS,
-            )
-
-            val responderStats = awaitResponderStats(responder)
-            assertEquals(EXPECTED_CONNECTIONS, responderStats.accepted)
-            assertEquals(EXPECTED_CONNECTIONS, responderStats.responses)
-            assertEquals(0L, responderStats.rejected)
-            assertTrue(nativeTrace.contains("tcpFlows="))
             assertFalse(NativeTunBridge.isRunning())
         } finally {
             runCatching {
@@ -212,6 +121,119 @@ class ExternalTlsEvidenceInstrumentedTest {
             instrumentation.runOnMainSync { activity?.finish() }
             shell("appops set $packageName ACTIVATE_VPN default")
         }
+    }
+
+    private fun assertSuccessfulEvidenceResult(
+        result: Intent,
+        responder: LoopbackTlsEvidenceServer,
+        expectedTotalConnections: Long,
+    ) {
+        val nativeTrace = NativeTunBridge.transportDiagnostics()
+        val failure = buildString {
+            append(result.getStringExtra(TunnelContract.EXTRA_ERROR))
+            append("; nativeTrace=")
+            append(nativeTrace)
+            append("; responder=")
+            append(responder.stats())
+        }
+        assertEquals(
+            failure,
+            TunnelContract.STATUS_EXTERNAL_TLS_EVIDENCE_COMPLETED,
+            result.getStringExtra(TunnelContract.EXTRA_STATUS),
+        )
+        assertEquals(
+            TunnelContract.MODE_NATIVE_EXTERNAL_TLS_EVIDENCE,
+            result.getStringExtra(TunnelContract.EXTRA_ENGINE_MODE),
+        )
+        assertEquals(
+            TEST_HOSTNAME,
+            result.getStringExtra(TunnelContract.EXTRA_EVIDENCE_HOSTNAME),
+        )
+        assertEquals(
+            TEST_PUBLIC_IPV4,
+            result.getStringExtra(TunnelContract.EXTRA_EVIDENCE_RESOLVED_IPV4),
+        )
+        assertEquals(
+            443,
+            result.getIntExtra(TunnelContract.EXTRA_EVIDENCE_TARGET_PORT, 0),
+        )
+        assertEquals(
+            TlsClientHelloSplitStrategy.ID.value,
+            result.getStringExtra(TunnelContract.EXTRA_STRATEGY_ID),
+        )
+        assertEquals(
+            2,
+            result.getIntExtra(TunnelContract.EXTRA_STRATEGY_SEGMENTS, 0),
+        )
+        assertEquals(
+            EXPECTED_SPLIT_OFFSET,
+            result.getIntExtra(TunnelContract.EXTRA_STRATEGY_SPLIT_OFFSET, 0),
+        )
+        assertEquals(
+            StrategyEvaluationDecision.KEEP_FOR_LAB_SESSION.name,
+            result.getStringExtra(TunnelContract.EXTRA_STRATEGY_DECISION),
+        )
+        assertEquals(
+            StrategyEvaluationReason.PASSED_WITHIN_LATENCY_BUDGET.name,
+            result.getStringExtra(TunnelContract.EXTRA_STRATEGY_REASON),
+        )
+        assertEquals(
+            StrategySessionGateState.LAB_APPROVED.name,
+            result.getStringExtra(TunnelContract.EXTRA_STRATEGY_GATE_STATE),
+        )
+        assertEquals(
+            TlsRecordKind.ALERT.name,
+            result.getStringExtra(TunnelContract.EXTRA_EVIDENCE_BASELINE_RECORD_KIND),
+        )
+        assertEquals(
+            TlsRecordKind.ALERT.name,
+            result.getStringExtra(TunnelContract.EXTRA_EVIDENCE_STRATEGY_RECORD_KIND),
+        )
+        assertEquals(
+            TlsRecordKind.ALERT.name,
+            result.getStringExtra(TunnelContract.EXTRA_EVIDENCE_RECOVERY_RECORD_KIND),
+        )
+        assertTrue(
+            result.getLongExtra(
+                TunnelContract.EXTRA_STRATEGY_BASELINE_LATENCY_MILLIS,
+                -1L,
+            ) >= 1L,
+        )
+        assertTrue(
+            result.getLongExtra(
+                TunnelContract.EXTRA_STRATEGY_LATENCY_MILLIS,
+                -1L,
+            ) >= 1L,
+        )
+        assertTrue(
+            result.getLongExtra(
+                TunnelContract.EXTRA_STRATEGY_RECOVERY_LATENCY_MILLIS,
+                -1L,
+            ) >= 1L,
+        )
+        assertNull(result.getStringExtra(TunnelContract.EXTRA_STRATEGY_BASELINE_FAILURE))
+        assertNull(result.getStringExtra(TunnelContract.EXTRA_STRATEGY_PHASE_FAILURE))
+        assertNull(result.getStringExtra(TunnelContract.EXTRA_STRATEGY_RECOVERY_FAILURE))
+        assertTrue(
+            result.getLongExtra(TunnelContract.EXTRA_PROBE_UPLOADED_BYTES, 0L) > 0L,
+        )
+        assertTrue(
+            result.getLongExtra(TunnelContract.EXTRA_PROBE_DOWNLOADED_BYTES, 0L) >=
+                TLS_HEADER_BYTES * CONNECTIONS_PER_SESSION,
+        )
+        assertTrue(
+            result.getLongExtra(TunnelContract.EXTRA_PROBE_RELAY_CONNECTIONS, 0L) >=
+                CONNECTIONS_PER_SESSION,
+        )
+
+        val responderStats = awaitResponderStats(
+            responder = responder,
+            expectedResponses = expectedTotalConnections,
+        )
+        assertEquals(expectedTotalConnections, responderStats.accepted)
+        assertEquals(expectedTotalConnections, responderStats.responses)
+        assertEquals(0L, responderStats.rejected)
+        assertTrue(nativeTrace.contains("tcpFlows="))
     }
 
     private fun awaitTerminalStatus(statuses: LinkedBlockingQueue<Intent>): Intent {
@@ -232,10 +254,11 @@ class ExternalTlsEvidenceInstrumentedTest {
 
     private fun awaitResponderStats(
         responder: LoopbackTlsEvidenceServer,
-    ): dev.connectx.vpn.relay.LoopbackTlsEvidenceStats {
+        expectedResponses: Long,
+    ): LoopbackTlsEvidenceStats {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
         var stats = responder.stats()
-        while (stats.responses < EXPECTED_CONNECTIONS && System.nanoTime() < deadline) {
+        while (stats.responses < expectedResponses && System.nanoTime() < deadline) {
             Thread.sleep(20)
             stats = responder.stats()
         }
@@ -268,7 +291,7 @@ class ExternalTlsEvidenceInstrumentedTest {
         const val TEST_HOSTNAME = "example.org"
         const val TEST_PUBLIC_IPV4 = "93.184.216.34"
         const val EXPECTED_SPLIT_OFFSET = 43
-        const val EXPECTED_CONNECTIONS = 3L
+        const val CONNECTIONS_PER_SESSION = 3L
         const val TLS_HEADER_BYTES = 5L
         const val PROBE_TIMEOUT_SECONDS = 60L
     }
