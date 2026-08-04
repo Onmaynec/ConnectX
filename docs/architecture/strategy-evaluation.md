@@ -121,6 +121,8 @@ DISABLED
   └─ no automatic transition
 ```
 
+The only public construction entry point creates the initial `READY` state. The primary constructor is module-internal, and the strategy module uses consistent data-class copy visibility, so external Kotlin modules cannot manufacture `EVALUATING`, `LAB_APPROVED`, or `COOLDOWN` with `copy()`. Runtime invariants additionally require `EVALUATING` to carry no previous decision, `LAB_APPROVED` to carry exactly `KEEP_FOR_LAB_SESSION`, and `COOLDOWN` to carry a non-keep decision plus a deadline.
+
 An interrupted service, setup failure, cancellation, or cleanup failure cannot silently leave the strategy approved. Generation checks are performed before and during every phase, write, echo validation, and relay-stat wait.
 
 A late or duplicated `ACTION_STOP` after a completed evaluation is explicitly idempotent. Once resources are closed and the gate is `LAB_APPROVED`, a stale stop command does not manufacture a failure or move the session into cooldown. Cooldown on stop is applied only while resources are still active or the gate is still `EVALUATING`.
