@@ -53,6 +53,13 @@ object TunnelContract {
     const val EXTRA_EVIDENCE_RECOVERY_RECORD_KIND =
         "dev.connectx.extra.EVIDENCE_RECOVERY_RECORD_KIND"
 
+    // Honored only when the installed application is debuggable. Release builds
+    // reject these values before opening any relay or TUN resource.
+    const val EXTRA_EVIDENCE_TEST_RESOLVED_IPV4 =
+        "dev.connectx.extra.EVIDENCE_TEST_RESOLVED_IPV4"
+    const val EXTRA_EVIDENCE_TEST_LOOPBACK_PORT =
+        "dev.connectx.extra.EVIDENCE_TEST_LOOPBACK_PORT"
+
     const val MODE_FOUNDATION = "foundation"
     const val MODE_NATIVE_SELF_TEST = "native_self_test"
     const val MODE_NATIVE_TCP_PROBE = "native_tcp_probe"
