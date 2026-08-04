@@ -407,6 +407,11 @@ data class StrategySessionGate internal constructor(
             "Cooldown deadline must not be negative"
         }
         when (state) {
+            StrategySessionGateState.READY,
+            StrategySessionGateState.DISABLED,
+            -> require(lastDecision == null) {
+                "$state cannot carry a previous decision"
+            }
             StrategySessionGateState.EVALUATING -> require(lastDecision == null) {
                 "An active evaluation cannot carry a previous decision"
             }
@@ -421,9 +426,6 @@ data class StrategySessionGate internal constructor(
             ) {
                 "COOLDOWN must carry a non-keep decision"
             }
-            StrategySessionGateState.READY,
-            StrategySessionGateState.DISABLED,
-            -> Unit
         }
     }
 
@@ -436,6 +438,7 @@ data class StrategySessionGate internal constructor(
             copy(
                 state = StrategySessionGateState.READY,
                 cooldownUntilElapsedMillis = null,
+                lastDecision = null,
             )
         } else {
             this
@@ -517,6 +520,7 @@ data class StrategySessionGate internal constructor(
     fun disable(): StrategySessionGate = copy(
         state = StrategySessionGateState.DISABLED,
         cooldownUntilElapsedMillis = null,
+        lastDecision = null,
     )
 
     private fun saturatingDeadline(now: Long, cooldown: Long): Long =
