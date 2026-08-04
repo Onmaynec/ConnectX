@@ -64,6 +64,31 @@ class LoopbackTlsEvidenceServerTest {
     }
 
     @Test
+    fun rejectsClientHelloWhoseHandshakeLengthDoesNotMatchRecord() {
+        LoopbackTlsEvidenceServer(socketTimeoutMillis = 500).use { server ->
+            val port = server.start()
+            val malformed = syntheticClientHello().also { record ->
+                // Record contains 35 body bytes, but the handshake declares 34.
+                record[8] = 34
+            }
+            Socket().use { socket ->
+                socket.soTimeout = 1_000
+                socket.connect(InetSocketAddress("127.0.0.1", port), 1_000)
+                socket.getOutputStream().apply {
+                    write(malformed)
+                    flush()
+                }
+                assertEquals(-1, socket.getInputStream().read())
+            }
+
+            val stats = awaitStats(server, rejected = 1L)
+            assertEquals(1L, stats.accepted)
+            assertEquals(0L, stats.responses)
+            assertEquals(1L, stats.rejected)
+        }
+    }
+
+    @Test
     fun repeatedStopIsIdempotent() {
         val server = LoopbackTlsEvidenceServer()
         assertTrue(server.start() in 1..65535)
