@@ -181,6 +181,7 @@ if ((RUN_DEVICE_GATES)); then
     ADB=(adb)
   fi
   if [[ -n "${ADB_SERIAL:-}" ]]; then
+    export ANDROID_SERIAL="$ADB_SERIAL"
     ADB+=( -s "$ADB_SERIAL" )
   fi
 
