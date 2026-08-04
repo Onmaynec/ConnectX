@@ -62,22 +62,20 @@ data class ExternalTlsEvidenceUiState(
             decision != null &&
             reason != null
 
-    fun redactedReportText(): String = buildString {
-        appendLine("ConnectX v0.3.0-alpha.3 — TLS Evidence Lab")
-        appendLine("target=redacted-public-host:${targetPort ?: 443}")
-        appendLine("route=TEST-NET-only")
-        appendLine("transport=TCP")
-        appendLine("tls_payload=ClientHello-only")
-        appendLine("baseline=${phaseReport(baselineLatencyMillis, baselineRecordKind)}")
-        appendLine("strategy=${phaseReport(strategyLatencyMillis, strategyRecordKind)}")
-        appendLine("recovery=${phaseReport(recoveryLatencyMillis, recoveryRecordKind)}")
-        appendLine("decision=${decision ?: "UNKNOWN"}")
-        appendLine("reason=${reason ?: "UNKNOWN"}")
-        appendLine("gate=${gateState ?: "UNKNOWN"}")
-        appendLine("hostname=REDACTED")
-        appendLine("resolved_ipv4=REDACTED")
-        append("claim=network-specific-lab-evidence-not-universal-bypass")
-    }
+    fun redactedReportText(): String = buildRedactedEvidenceReport(
+        ExternalTlsEvidenceReportData(
+            targetPort = targetPort,
+            baselineLatencyMillis = baselineLatencyMillis,
+            strategyLatencyMillis = strategyLatencyMillis,
+            recoveryLatencyMillis = recoveryLatencyMillis,
+            baselineRecordKind = baselineRecordKind,
+            strategyRecordKind = strategyRecordKind,
+            recoveryRecordKind = recoveryRecordKind,
+            decision = decision,
+            reason = reason,
+            gateState = gateState,
+        ),
+    )
 }
 
 @Composable
@@ -272,10 +270,3 @@ private fun phaseLine(
         recordKind,
     ).joinToString(" · ")
 }
-
-private fun phaseReport(latencyMillis: Long?, recordKind: String?): String =
-    listOfNotNull(
-        latencyMillis?.let { "latency_ms=$it" },
-        recordKind?.let { "record=$it" },
-    ).ifEmpty { listOf("not_available") }
-        .joinToString(",")
