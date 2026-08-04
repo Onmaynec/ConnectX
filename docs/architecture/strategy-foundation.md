@@ -40,9 +40,30 @@ A root-requiring strategy must additionally receive an explicit root-available c
 
 ## TLS inspection boundary
 
-The bounded inspector validates only enough structure to decide whether a payload is one complete TLS ClientHello record suitable for the lab planner.
+The bounded inspector accepts one complete, structurally valid TLS ClientHello record suitable for the Lab planner.
 
-It does not:
+The shared `LabTlsClientHello` fixture is exactly 50 bytes and contains:
+
+- TLS 1.2 legacy record and ClientHello versions;
+- a 32-byte caller-supplied random;
+- an empty session id;
+- one two-byte cipher suite;
+- one null compression method;
+- no extensions, host name, credential or external identifier.
+
+The inspector validates:
+
+- record content type, version and exact length;
+- ClientHello handshake type, version and exact length;
+- session-id vector bounds and the 32-byte maximum;
+- a non-empty, even-length cipher-suite vector;
+- a non-empty compression-method vector;
+- optional extension-block length and every extension body boundary;
+- absence of record chaining and trailing bytes.
+
+The previous 44-byte prefix-only fixture contained only the fixed ClientHello prefix and session-id length. It is now rejected as `MALFORMED_LENGTH`; it is not considered a valid ClientHello.
+
+The inspector does not:
 
 - decrypt TLS;
 - parse certificates;
@@ -53,7 +74,9 @@ It does not:
 
 ## Execution boundary
 
-The Android lab executor performs two ordered `SocketOutputStream.write()` calls for an exact synthetic ClientHello and exact TEST-NET destination.
+The Android lab executor performs two ordered `SocketOutputStream.write()` calls for the exact shared synthetic ClientHello and exact TEST-NET destination.
+
+The deterministic split offset is `43`, producing segments of 43 and 7 bytes. Both the one-shot Lab probe and the A/B/A evaluator use the same builder rather than maintaining private byte layouts.
 
 This proves:
 
