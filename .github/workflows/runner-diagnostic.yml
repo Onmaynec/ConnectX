@@ -1,0 +1,32 @@
+name: Runner Diagnostic
+
+on:
+  push:
+    branches:
+      - ci/runner-diagnostic-20260805
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu-24:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Confirm Ubuntu 24 runner
+        shell: bash
+        run: |
+          echo "runner=${RUNNER_NAME}"
+          echo "os=${RUNNER_OS}"
+          uname -a
+
+  ubuntu-22:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Confirm Ubuntu 22 runner
+        shell: bash
+        run: |
+          echo "runner=${RUNNER_NAME}"
+          echo "os=${RUNNER_OS}"
+          uname -a
