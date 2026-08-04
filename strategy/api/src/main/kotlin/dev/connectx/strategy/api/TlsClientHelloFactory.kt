@@ -8,9 +8,10 @@ import javax.net.ssl.SSLContext
 /** Creates one local ClientHello record without opening a network connection. */
 object TlsClientHelloFactory {
     fun create(normalizedHostname: String): TlsClientHelloCreationResult {
+        val validation = ExternalTlsEvidenceTarget.validateHostname(normalizedHostname)
         if (
-            ExternalTlsEvidenceTarget.validateHostname(normalizedHostname) !is
-            HostnameValidationResult.Valid
+            validation !is HostnameValidationResult.Valid ||
+            validation.normalizedHostname != normalizedHostname
         ) {
             return TlsClientHelloCreationResult.Rejected(
                 TlsClientHelloCreationFailure.INVALID_HOSTNAME,
