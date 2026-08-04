@@ -389,11 +389,13 @@ enum class StrategySessionGateState {
 }
 
 /** Immutable session gate that prevents immediate re-evaluation and flapping. */
-data class StrategySessionGate(
-    val state: StrategySessionGateState = StrategySessionGateState.READY,
+data class StrategySessionGate internal constructor(
+    val state: StrategySessionGateState,
     val cooldownUntilElapsedMillis: Long? = null,
     val lastDecision: StrategyEvaluationDecision? = null,
 ) {
+    constructor() : this(StrategySessionGateState.READY)
+
     init {
         require(
             (state == StrategySessionGateState.COOLDOWN) ==
@@ -403,6 +405,25 @@ data class StrategySessionGate(
         }
         require(cooldownUntilElapsedMillis == null || cooldownUntilElapsedMillis >= 0L) {
             "Cooldown deadline must not be negative"
+        }
+        when (state) {
+            StrategySessionGateState.EVALUATING -> require(lastDecision == null) {
+                "An active evaluation cannot carry a previous decision"
+            }
+            StrategySessionGateState.LAB_APPROVED -> require(
+                lastDecision == StrategyEvaluationDecision.KEEP_FOR_LAB_SESSION,
+            ) {
+                "LAB_APPROVED must carry the keep decision"
+            }
+            StrategySessionGateState.COOLDOWN -> require(
+                lastDecision != null &&
+                    lastDecision != StrategyEvaluationDecision.KEEP_FOR_LAB_SESSION,
+            ) {
+                "COOLDOWN must carry a non-keep decision"
+            }
+            StrategySessionGateState.READY,
+            StrategySessionGateState.DISABLED,
+            -> Unit
         }
     }
 
@@ -489,6 +510,7 @@ data class StrategySessionGate(
         return copy(
             state = StrategySessionGateState.READY,
             cooldownUntilElapsedMillis = null,
+            lastDecision = null,
         )
     }
 
