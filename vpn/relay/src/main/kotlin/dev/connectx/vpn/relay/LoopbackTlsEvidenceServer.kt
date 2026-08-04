@@ -18,9 +18,10 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * Loopback-only deterministic responder for the external TLS evidence Android gate.
  *
- * It accepts one bounded TLS handshake record, verifies that its first handshake
- * message is ClientHello, and returns a fixed TLS alert record. It does not parse
- * SNI, perform a TLS handshake, open an outbound connection or retain payloads.
+ * It accepts one bounded TLS handshake record, verifies that its first and only
+ * handshake message is a complete ClientHello, and returns a fixed TLS alert
+ * record. It does not parse SNI, perform a TLS handshake, open an outbound
+ * connection or retain payloads.
  */
 class LoopbackTlsEvidenceServer(
     private val maxClientHelloBytes: Int = DEFAULT_MAX_CLIENT_HELLO_BYTES,
@@ -145,7 +146,12 @@ class LoopbackTlsEvidenceServer(
 
             val record = ByteArray(recordLength)
             input.readFully(record)
-            if (record.u8(0) != CLIENT_HELLO_HANDSHAKE_TYPE) {
+            val handshakeBodyLength = record.u24(HANDSHAKE_LENGTH_OFFSET)
+            if (
+                record.u8(0) != CLIENT_HELLO_HANDSHAKE_TYPE ||
+                handshakeBodyLength < MIN_CLIENT_HELLO_BODY_BYTES ||
+                handshakeBodyLength != recordLength - HANDSHAKE_HEADER_BYTES
+            ) {
                 rejectedCount.incrementAndGet()
                 return
             }
@@ -168,6 +174,9 @@ class LoopbackTlsEvidenceServer(
     private fun ByteArray.u16(offset: Int): Int =
         (u8(offset) shl 8) or u8(offset + 1)
 
+    private fun ByteArray.u24(offset: Int): Int =
+        (u8(offset) shl 16) or (u8(offset + 1) shl 8) or u8(offset + 2)
+
     private companion object {
         const val LOOPBACK_HOST = "127.0.0.1"
         const val TLS_RECORD_HEADER_BYTES = 5
@@ -175,7 +184,10 @@ class LoopbackTlsEvidenceServer(
         const val TLS_MAJOR_VERSION = 3
         val TLS_MINOR_VERSION_RANGE = 1..4
         const val CLIENT_HELLO_HANDSHAKE_TYPE = 1
-        const val MIN_CLIENT_HELLO_BYTES = 39
+        const val HANDSHAKE_HEADER_BYTES = 4
+        const val HANDSHAKE_LENGTH_OFFSET = 1
+        const val MIN_CLIENT_HELLO_BODY_BYTES = 35
+        const val MIN_CLIENT_HELLO_BYTES = HANDSHAKE_HEADER_BYTES + MIN_CLIENT_HELLO_BODY_BYTES
         const val DEFAULT_MAX_CLIENT_HELLO_BYTES = 16 * 1024
         const val MAX_ALLOWED_CLIENT_HELLO_BYTES = 18_432
         const val DEFAULT_SOCKET_TIMEOUT_MILLIS = 3_000
