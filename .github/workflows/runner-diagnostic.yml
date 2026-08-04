@@ -34,3 +34,25 @@ jobs:
           echo "runner=${RUNNER_NAME}"
           echo "os=${RUNNER_OS}"
           uname -a
+
+  macos-14:
+    runs-on: macos-14
+    timeout-minutes: 5
+    steps:
+      - name: Confirm macOS runner
+        shell: bash
+        run: |
+          echo "runner=${RUNNER_NAME}"
+          echo "os=${RUNNER_OS}"
+          uname -a
+
+  windows-2022:
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - name: Confirm Windows runner
+        shell: pwsh
+        run: |
+          Write-Output "runner=$env:RUNNER_NAME"
+          Write-Output "os=$env:RUNNER_OS"
+          Get-ComputerInfo | Select-Object WindowsProductName, OsVersion
