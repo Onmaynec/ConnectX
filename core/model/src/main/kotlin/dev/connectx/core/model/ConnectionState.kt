@@ -213,9 +213,9 @@ object ConnectionStateReducer {
                 running = event.mode == EngineMode.NATIVE_DNS_PROBE,
                 error = null,
             ),
-            strategyProbe = current.strategyProbe.copy(
-                running = event.mode in strategyModes,
-                error = null,
+            strategyProbe = strategyDiagnosticsForStart(
+                current = current.strategyProbe,
+                mode = event.mode,
             ),
             errorMessage = null,
         )
@@ -272,9 +272,9 @@ object ConnectionStateReducer {
                 running = event.mode == EngineMode.NATIVE_DNS_PROBE,
                 error = null,
             ),
-            strategyProbe = current.strategyProbe.copy(
-                running = event.mode in strategyModes,
-                error = null,
+            strategyProbe = strategyDiagnosticsForStart(
+                current = current.strategyProbe,
+                mode = event.mode,
             ),
             errorMessage = null,
         )
@@ -487,20 +487,28 @@ object ConnectionStateReducer {
                 lastSuccess = if (current.mode == EngineMode.NATIVE_DNS_PROBE) false else current.dnsProbe.lastSuccess,
                 error = if (current.mode == EngineMode.NATIVE_DNS_PROBE) event.message else current.dnsProbe.error,
             ),
-            strategyProbe = current.strategyProbe.copy(
-                running = false,
-                lastSuccess = if (current.mode in strategyModes) {
-                    false
-                } else {
-                    current.strategyProbe.lastSuccess
-                },
-                error = if (current.mode in strategyModes) {
-                    event.message
-                } else {
-                    current.strategyProbe.error
-                },
-            ),
+            strategyProbe = if (current.mode in strategyModes) {
+                StrategyProbeDiagnostics(
+                    running = false,
+                    lastSuccess = false,
+                    error = event.message,
+                )
+            } else {
+                current.strategyProbe.copy(running = false)
+            },
             errorMessage = event.message,
+        )
+    }
+
+    private fun strategyDiagnosticsForStart(
+        current: StrategyProbeDiagnostics,
+        mode: EngineMode,
+    ): StrategyProbeDiagnostics = if (mode in strategyModes) {
+        StrategyProbeDiagnostics(running = true)
+    } else {
+        current.copy(
+            running = false,
+            error = null,
         )
     }
 
