@@ -39,7 +39,7 @@ DNS выполняется один раз до запуска TUN. Все по�
 
 ## TLS boundary
 
-ClientHello создаётся локальным `SSLEngine` с SNI и протоколами TLS 1.2/1.3. `SSLEngine` не подключается к сети. Полученный массив обязан пройти существующий bounded `TlsClientHelloInspector`; иначе probe не начинается.
+ClientHello создаётся локальным `SSLEngine` с SNI и протоколами TLS 1.2/1.3. `SSLEngine` не подключается к сети. Фабрика bounded обрабатывает `NEED_TASK` и `NEED_WRAP`: не более восьми engine steps и восьми delegated tasks на step. Полученный массив обязан пройти существующий bounded `TlsClientHelloInspector`; иначе probe не начинается.
 
 В каждой фазе отправляется только ClientHello:
 
@@ -51,16 +51,30 @@ ClientHello создаётся локальным `SSLEngine` с SNI и прот
 
 ## Evaluation
 
-Три результата передаются существующему `StrategyHealthEvaluator`. В отчёте сохраняются только:
+Три результата передаются существующему `StrategyHealthEvaluator`. В UI-сеансе сохраняются только:
 
 - success/failure category;
 - latency каждой фазы;
 - тип первого TLS record (`HANDSHAKE` или `ALERT`);
 - byte/connection counters;
 - `KEEP_FOR_LAB_SESSION`, rollback или reject reason;
-- состояние session gate.
+- состояние session gate;
+- canonical hostname и pinned IPv4 для явного контроля выбранной цели пользователем.
 
-Hostname и pinned IPv4 показываются пользователю в текущем UI-сеансе, но packet payload, SOCKS credentials, cookies, tokens и response body не попадают в runtime logs.
+Packet payload, SOCKS credentials, cookies, tokens и response body не попадают в runtime logs.
+
+## Обезличенный экспорт
+
+После завершения пользователь может открыть Android Sharesheet и передать текстовый отчёт. Экспортируемая строка не содержит:
+
+- исходный или canonical hostname;
+- resolved IPv4;
+- payload;
+- SOCKS credentials;
+- error text;
+- cookie, token или HTTP data.
+
+Вместо цели записывается `redacted-public-host:443`. Экспорт содержит только фазовые latency/record-kind, decision, reason, gate state и явную пометку `network-specific-lab-evidence-not-universal-bypass`.
 
 ## Deterministic Android gate
 
@@ -73,6 +87,8 @@ Instrumentation не зависит от внешнего DNS или интер�
 Production service принимает test override только при `ApplicationInfo.FLAG_DEBUGGABLE`. Release APK отклоняет эти extras до запуска relay/TUN.
 
 Responder слушает только `127.0.0.1`, принимает один полный bounded ClientHello и проверяет согласованность TLS record length с трёхбайтовой handshake length. Затем он возвращает фиксированный TLS alert record. Он не парсит SNI, не открывает исходящие соединения и не сохраняет payload.
+
+Android gate выполняет две последовательные явные A/B/A-сессии. Это проверяет шесть отдельных TUN/relay TCP flows, повторный старт из `LAB_APPROVED` и отсутствие работающего native stack после каждого teardown.
 
 ## Ограничения alpha.3
 
