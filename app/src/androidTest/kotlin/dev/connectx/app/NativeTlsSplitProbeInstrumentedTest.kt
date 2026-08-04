@@ -9,6 +9,7 @@ import android.net.VpnService
 import androidx.core.content.ContextCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.connectx.strategy.api.LabTlsClientHello
 import dev.connectx.strategy.api.TlsClientHelloSplitStrategy
 import dev.connectx.vpn.api.TunnelContract
 import dev.connectx.vpn.nativebridge.NativeTunBridge
@@ -96,7 +97,7 @@ class NativeTlsSplitProbeInstrumentedTest {
                 result.getIntExtra(TunnelContract.EXTRA_STRATEGY_SEGMENTS, 0),
             )
             assertEquals(
-                EXPECTED_SPLIT_OFFSET,
+                LabTlsClientHello.SPLIT_OFFSET,
                 result.getIntExtra(TunnelContract.EXTRA_STRATEGY_SPLIT_OFFSET, 0),
             )
             assertTrue(
@@ -110,11 +111,11 @@ class NativeTlsSplitProbeInstrumentedTest {
             )
             assertTrue(
                 result.getLongExtra(TunnelContract.EXTRA_PROBE_UPLOADED_BYTES, 0L) >=
-                    CLIENT_HELLO_BYTES,
+                    LabTlsClientHello.PAYLOAD_BYTES.toLong(),
             )
             assertTrue(
                 result.getLongExtra(TunnelContract.EXTRA_PROBE_DOWNLOADED_BYTES, 0L) >=
-                    CLIENT_HELLO_BYTES,
+                    LabTlsClientHello.PAYLOAD_BYTES.toLong(),
             )
             assertTrue(
                 result.getLongExtra(TunnelContract.EXTRA_PROBE_RELAY_CONNECTIONS, 0L) >= 1L,
@@ -160,8 +161,6 @@ class NativeTlsSplitProbeInstrumentedTest {
     }
 
     private companion object {
-        const val EXPECTED_SPLIT_OFFSET = 43
-        const val CLIENT_HELLO_BYTES = 44L
         const val PROBE_TIMEOUT_SECONDS = 40L
     }
 }
