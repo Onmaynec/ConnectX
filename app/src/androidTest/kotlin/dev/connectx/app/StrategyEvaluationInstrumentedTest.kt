@@ -9,6 +9,7 @@ import android.net.VpnService
 import androidx.core.content.ContextCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.connectx.strategy.api.LabTlsClientHello
 import dev.connectx.strategy.api.StrategyEvaluationDecision
 import dev.connectx.strategy.api.StrategyEvaluationReason
 import dev.connectx.strategy.api.StrategySessionGateState
@@ -95,7 +96,7 @@ class StrategyEvaluationInstrumentedTest {
                 result.getIntExtra(TunnelContract.EXTRA_STRATEGY_SEGMENTS, 0),
             )
             assertEquals(
-                EXPECTED_SPLIT_OFFSET,
+                LabTlsClientHello.SPLIT_OFFSET,
                 result.getIntExtra(TunnelContract.EXTRA_STRATEGY_SPLIT_OFFSET, 0),
             )
             assertEquals(
@@ -146,13 +147,15 @@ class StrategyEvaluationInstrumentedTest {
             assertNull(
                 result.getStringExtra(TunnelContract.EXTRA_STRATEGY_RECOVERY_FAILURE),
             )
+            val expectedPayloadBytes =
+                LabTlsClientHello.PAYLOAD_BYTES.toLong() * EXPECTED_CONNECTIONS
             assertTrue(
                 result.getLongExtra(TunnelContract.EXTRA_PROBE_UPLOADED_BYTES, 0L) >=
-                    CLIENT_HELLO_BYTES * EXPECTED_CONNECTIONS,
+                    expectedPayloadBytes,
             )
             assertTrue(
                 result.getLongExtra(TunnelContract.EXTRA_PROBE_DOWNLOADED_BYTES, 0L) >=
-                    CLIENT_HELLO_BYTES * EXPECTED_CONNECTIONS,
+                    expectedPayloadBytes,
             )
             assertTrue(
                 result.getLongExtra(TunnelContract.EXTRA_PROBE_RELAY_CONNECTIONS, 0L) >=
@@ -263,8 +266,6 @@ class StrategyEvaluationInstrumentedTest {
     }
 
     private companion object {
-        const val EXPECTED_SPLIT_OFFSET = 43
-        const val CLIENT_HELLO_BYTES = 44L
         const val EXPECTED_CONNECTIONS = 3L
         const val PROBE_TIMEOUT_SECONDS = 50L
         const val STATUS_TIMEOUT_SECONDS = 15L
