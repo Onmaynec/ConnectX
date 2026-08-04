@@ -68,11 +68,7 @@ data class ExternalTlsEvidenceTarget private constructor(
             normalizedHostname: String,
             addresses: List<InetAddress>,
         ): TargetResolutionResult {
-            val validation = validateHostname(normalizedHostname)
-            if (
-                validation !is HostnameValidationResult.Valid ||
-                validation.normalizedHostname != normalizedHostname
-            ) {
+            if (!isCanonicalHostname(normalizedHostname)) {
                 return TargetResolutionResult.Rejected(
                     TargetRejectionReason.INVALID_HOSTNAME_SYNTAX,
                 )
@@ -101,16 +97,67 @@ data class ExternalTlsEvidenceTarget private constructor(
                 )
                 .first()
 
-            return TargetResolutionResult.Valid(
-                ExternalTlsEvidenceTarget(
-                    hostname = normalizedHostname,
-                    ipv4Address = selected.hostAddress
-                        ?: return TargetResolutionResult.Rejected(
-                            TargetRejectionReason.NO_RESOLVED_ADDRESS,
-                        ),
-                    port = TLS_PORT,
-                ),
+            return createTarget(
+                normalizedHostname = normalizedHostname,
+                address = selected,
             )
+        }
+
+        /** Used by a debuggable deterministic Android gate; never performs DNS. */
+        fun bindResolvedIpv4Literal(
+            normalizedHostname: String,
+            ipv4Literal: String,
+        ): TargetResolutionResult {
+            if (!isCanonicalHostname(normalizedHostname)) {
+                return TargetResolutionResult.Rejected(
+                    TargetRejectionReason.INVALID_HOSTNAME_SYNTAX,
+                )
+            }
+            val bytes = parseIpv4Literal(ipv4Literal)
+                ?: return TargetResolutionResult.Rejected(TargetRejectionReason.IPV4_REQUIRED)
+            if (!PublicIpv4Policy.isAllowed(bytes)) {
+                return TargetResolutionResult.Rejected(TargetRejectionReason.NON_PUBLIC_ADDRESS)
+            }
+            val address = InetAddress.getByAddress(bytes) as Inet4Address
+            return createTarget(
+                normalizedHostname = normalizedHostname,
+                address = address,
+            )
+        }
+
+        private fun createTarget(
+            normalizedHostname: String,
+            address: Inet4Address,
+        ): TargetResolutionResult = TargetResolutionResult.Valid(
+            ExternalTlsEvidenceTarget(
+                hostname = normalizedHostname,
+                ipv4Address = address.hostAddress
+                    ?: return TargetResolutionResult.Rejected(
+                        TargetRejectionReason.NO_RESOLVED_ADDRESS,
+                    ),
+                port = TLS_PORT,
+            ),
+        )
+
+        private fun isCanonicalHostname(value: String): Boolean {
+            val validation = validateHostname(value)
+            return validation is HostnameValidationResult.Valid &&
+                validation.normalizedHostname == value
+        }
+
+        private fun parseIpv4Literal(value: String): ByteArray? {
+            val parts = value.split('.')
+            if (parts.size != 4) return null
+            val octets = parts.map { part ->
+                if (part.isEmpty() || part.length > 3 || part.any { !it.isDigit() }) {
+                    return null
+                }
+                if (part.length > 1 && part.startsWith('0')) return null
+                val number = part.toIntOrNull() ?: return null
+                if (number !in 0..255) return null
+                number.toByte()
+            }
+            return octets.toByteArray()
         }
 
         private fun unsigned(value: Byte): Int = value.toInt() and 0xff
