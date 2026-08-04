@@ -7,12 +7,16 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func TestVersionContainsPinnedCommit(t *testing.T) {
+func TestVersionContainsReleaseAndPinnedCommit(t *testing.T) {
 	previous := upstreamCommit
 	upstreamCommit = "test-commit"
 	t.Cleanup(func() { upstreamCommit = previous })
 
-	if got := Version(); !strings.Contains(got, "test-commit") {
+	got := Version()
+	if !strings.HasPrefix(got, "connectx-go-bridge/0.3.0-alpha.3 upstream/") {
+		t.Fatalf("Version() = %q, expected alpha.3 release prefix", got)
+	}
+	if !strings.Contains(got, "test-commit") {
 		t.Fatalf("Version() = %q, expected pinned commit", got)
 	}
 }
