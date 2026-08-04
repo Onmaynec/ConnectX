@@ -1,5 +1,8 @@
 package dev.connectx.strategy.api
 
+import java.util.Collections
+import java.util.EnumMap
+
 /** A bounded, privacy-safe phase in a local strategy evaluation. */
 enum class StrategyHealthPhase {
     BASELINE,
@@ -139,18 +142,34 @@ data class StrategyEvaluationReport internal constructor(
         require(allowedStrategyLatencyMillis == null || allowedStrategyLatencyMillis >= 0L) {
             "Allowed strategy latency must not be negative"
         }
-        require(
-            reason == StrategyEvaluationReason.PASSED_WITHIN_LATENCY_BUDGET ==
-                (decision == StrategyEvaluationDecision.KEEP_FOR_LAB_SESSION),
-        ) {
-            "Only a passed latency budget may keep a strategy for the Lab session"
+
+        val expectedDecision = when (reason) {
+            StrategyEvaluationReason.PASSED_WITHIN_LATENCY_BUDGET ->
+                StrategyEvaluationDecision.KEEP_FOR_LAB_SESSION
+            StrategyEvaluationReason.BASELINE_FAILURE_BUDGET_EXCEEDED ->
+                StrategyEvaluationDecision.REJECT_BASELINE_UNHEALTHY
+            StrategyEvaluationReason.BASELINE_SAMPLES_INSUFFICIENT ->
+                StrategyEvaluationDecision.INCONCLUSIVE
+            StrategyEvaluationReason.STRATEGY_FAILURE_BUDGET_EXCEEDED ->
+                StrategyEvaluationDecision.ROLLBACK_CONFIRMED
+            StrategyEvaluationReason.STRATEGY_SAMPLES_INSUFFICIENT ->
+                StrategyEvaluationDecision.INCONCLUSIVE
+            StrategyEvaluationReason.STRATEGY_LATENCY_REGRESSION ->
+                StrategyEvaluationDecision.ROLLBACK_CONFIRMED
+            StrategyEvaluationReason.RECOVERY_FAILURE_BUDGET_EXCEEDED ->
+                StrategyEvaluationDecision.REJECT_ENVIRONMENT_UNSTABLE
+            StrategyEvaluationReason.RECOVERY_SAMPLES_INSUFFICIENT ->
+                StrategyEvaluationDecision.INCONCLUSIVE
         }
-        require(
-            (reason == StrategyEvaluationReason.STRATEGY_LATENCY_REGRESSION) ==
-                (latencyDeltaMillis != null &&
-                    decision == StrategyEvaluationDecision.ROLLBACK_CONFIRMED),
-        ) {
-            "Latency regression reports must carry rollback latency evidence"
+        require(decision == expectedDecision) {
+            "Decision $decision is incompatible with reason $reason"
+        }
+
+        val requiresLatencyEvidence =
+            reason == StrategyEvaluationReason.PASSED_WITHIN_LATENCY_BUDGET ||
+                reason == StrategyEvaluationReason.STRATEGY_LATENCY_REGRESSION
+        require((latencyDeltaMillis != null) == requiresLatencyEvidence) {
+            "Latency evidence must exist exactly for passed or regressed strategy reports"
         }
     }
 }
@@ -293,8 +312,18 @@ class StrategyHealthEvaluator(
             successes = latencies.size,
             failures = failures.size,
             medianLatencyMillis = median(latencies),
-            failureReasons = failures.groupingBy { it }.eachCount().toSortedMap(),
+            failureReasons = immutableFailureReasonCounts(failures),
         )
+    }
+
+    private fun immutableFailureReasonCounts(
+        failures: List<StrategySampleFailure>,
+    ): Map<StrategySampleFailure, Int> {
+        val counts = EnumMap<StrategySampleFailure, Int>(StrategySampleFailure::class.java)
+        failures.forEach { failure ->
+            counts[failure] = (counts[failure] ?: 0) + 1
+        }
+        return Collections.unmodifiableMap(counts)
     }
 
     private fun median(values: List<Long>): Long? {
