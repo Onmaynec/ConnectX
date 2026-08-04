@@ -112,8 +112,15 @@ class TlsClientHelloSplitStrategyTest {
     }
 
     @Test
-    fun invalidClientHelloLegacyVersionIsRejected() {
+    fun tls11LegacyVersionRemainsStructurallyAccepted() {
         val payload = validClientHello().apply { this[9] = 0x02 }
+
+        assertTrue(strategy.plan(payload, labContext, enabledGate) is StrategyPlan.Segmented)
+    }
+
+    @Test
+    fun tls13VersionCodeIsRejectedAsClientHelloLegacyVersion() {
+        val payload = validClientHello().apply { this[9] = 0x04 }
 
         assertRefused(
             strategy.plan(payload, labContext, enabledGate),
