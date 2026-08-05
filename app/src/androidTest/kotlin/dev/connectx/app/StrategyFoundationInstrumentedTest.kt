@@ -2,6 +2,7 @@ package dev.connectx.app
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.connectx.strategy.api.ApplicationProtocol
+import dev.connectx.strategy.api.LabTlsClientHello
 import dev.connectx.strategy.api.NetworkProtocol
 import dev.connectx.strategy.api.StrategyCapability
 import dev.connectx.strategy.api.StrategyContext
@@ -21,7 +22,7 @@ import org.junit.runner.RunWith
 class StrategyFoundationInstrumentedTest {
     @Test
     fun packagedStrategyIsDisabledByDefaultAndProducesLosslessLabPlanWhenExplicitlyEnabled() {
-        assertEquals("0.3.0-alpha.1", BuildConfig.VERSION_NAME)
+        assertEquals("0.3.0-alpha.2", BuildConfig.VERSION_NAME)
 
         val strategy = TlsClientHelloSplitStrategy()
         assertEquals(TlsClientHelloSplitStrategy.ID, strategy.descriptor.id)
@@ -34,7 +35,13 @@ class StrategyFoundationInstrumentedTest {
             strategy.descriptor.capabilities,
         )
 
-        val payload = validClientHello()
+        val payload = LabTlsClientHello.create(
+            ByteArray(LabTlsClientHello.RANDOM_BYTES) { index ->
+                (index * 3).toByte()
+            },
+        )
+        assertEquals(LabTlsClientHello.PAYLOAD_BYTES, payload.size)
+
         val context = StrategyContext(
             transport = TransportProtocol.TCP,
             network = NetworkProtocol.IPV4,
@@ -64,33 +71,7 @@ class StrategyFoundationInstrumentedTest {
         assertTrue(enabled is StrategyPlan.Segmented)
         enabled as StrategyPlan.Segmented
         assertEquals(2, enabled.segments.size)
-        assertEquals(43, enabled.splitOffset)
+        assertEquals(LabTlsClientHello.SPLIT_OFFSET, enabled.splitOffset)
         assertArrayEquals(payload, enabled.reconstruct())
-    }
-
-    private fun validClientHello(): ByteArray {
-        val body = ByteArray(35)
-        body[0] = 0x03
-        body[1] = 0x03
-        for (index in 2 until 34) {
-            body[index] = (index * 3).toByte()
-        }
-        body[34] = 0
-
-        val handshake = ByteArray(4 + body.size)
-        handshake[0] = 0x01
-        handshake[1] = 0
-        handshake[2] = 0
-        handshake[3] = body.size.toByte()
-        body.copyInto(handshake, destinationOffset = 4)
-
-        return ByteArray(5 + handshake.size).also { record ->
-            record[0] = 0x16
-            record[1] = 0x03
-            record[2] = 0x03
-            record[3] = 0
-            record[4] = handshake.size.toByte()
-            handshake.copyInto(record, destinationOffset = 5)
-        }
     }
 }
