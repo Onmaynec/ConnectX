@@ -23,6 +23,21 @@ class StrategyProbeStateReducerTest {
     }
 
     @Test
+    fun evaluationStartUsesDedicatedModeAndStrategyState() {
+        val state = ConnectionStateReducer.reduce(
+            ConnectionUiState(),
+            ConnectionEvent.StartRequested(EngineMode.NATIVE_STRATEGY_EVALUATION),
+        )
+
+        assertEquals(ConnectionState.STARTING, state.state)
+        assertEquals(EngineMode.NATIVE_STRATEGY_EVALUATION, state.mode)
+        assertTrue(state.strategyProbe.running)
+        assertFalse(state.probe.running)
+        assertFalse(state.udpProbe.running)
+        assertFalse(state.dnsProbe.running)
+    }
+
+    @Test
     fun completionStoresTypedStrategyMetricsAndReturnsOff() {
         val running = ConnectionStateReducer.reduce(
             ConnectionUiState(),
@@ -58,10 +73,63 @@ class StrategyProbeStateReducerTest {
     }
 
     @Test
+    fun evaluationCompletionStoresDecisionSeparatelyFromExecutionSuccess() {
+        val running = ConnectionStateReducer.reduce(
+            ConnectionUiState(),
+            ConnectionEvent.StartRequested(EngineMode.NATIVE_STRATEGY_EVALUATION),
+        )
+        val completed = ConnectionStateReducer.reduce(
+            running,
+            ConnectionEvent.StrategyEvaluationCompleted(
+                strategyId = "tls-clienthello-split-v1",
+                segments = 2,
+                splitOffset = 43,
+                decision = "ROLLBACK_CONFIRMED",
+                reason = "STRATEGY_LATENCY_REGRESSION",
+                baselineLatencyMillis = 10,
+                strategyLatencyMillis = 150,
+                recoveryLatencyMillis = 12,
+                latencyDeltaMillis = 140,
+                allowedStrategyLatencyMillis = 110,
+                baselineFailure = null,
+                strategyFailure = null,
+                recoveryFailure = null,
+                uploadedBytes = 132,
+                downloadedBytes = 132,
+                relayConnections = 3,
+                gateState = "COOLDOWN",
+                cooldownUntilElapsedMillis = 70_000,
+                nativeVersion = "connectx-go-bridge/0.2.0-alpha.6",
+                abi = "x86_64",
+            ),
+        )
+
+        assertEquals(ConnectionState.OFF, completed.state)
+        assertEquals(EngineMode.FOUNDATION, completed.mode)
+        assertEquals(true, completed.strategyProbe.lastSuccess)
+        assertEquals("ROLLBACK_CONFIRMED", completed.strategyProbe.evaluationDecision)
+        assertEquals(
+            "STRATEGY_LATENCY_REGRESSION",
+            completed.strategyProbe.evaluationReason,
+        )
+        assertEquals(10L, completed.strategyProbe.baselineLatencyMillis)
+        assertEquals(150L, completed.strategyProbe.strategyLatencyMillis)
+        assertEquals(12L, completed.strategyProbe.recoveryLatencyMillis)
+        assertEquals(140L, completed.strategyProbe.latencyDeltaMillis)
+        assertEquals(110L, completed.strategyProbe.allowedStrategyLatencyMillis)
+        assertEquals(132L, completed.strategyProbe.uploadedBytes)
+        assertEquals(132L, completed.strategyProbe.downloadedBytes)
+        assertEquals(3L, completed.strategyProbe.relayConnections)
+        assertEquals("COOLDOWN", completed.strategyProbe.gateState)
+        assertEquals(70_000L, completed.strategyProbe.cooldownUntilElapsedMillis)
+        assertNull(completed.strategyProbe.error)
+    }
+
+    @Test
     fun failureIsScopedToStrategyProbe() {
         val running = ConnectionStateReducer.reduce(
             ConnectionUiState(),
-            ConnectionEvent.StartRequested(EngineMode.NATIVE_TLS_SPLIT_PROBE),
+            ConnectionEvent.StartRequested(EngineMode.NATIVE_STRATEGY_EVALUATION),
         )
         val failed = ConnectionStateReducer.reduce(
             running,

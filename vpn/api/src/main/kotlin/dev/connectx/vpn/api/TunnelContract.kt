@@ -22,6 +22,27 @@ object TunnelContract {
     const val EXTRA_STRATEGY_ID = "dev.connectx.extra.STRATEGY_ID"
     const val EXTRA_STRATEGY_SEGMENTS = "dev.connectx.extra.STRATEGY_SEGMENTS"
     const val EXTRA_STRATEGY_SPLIT_OFFSET = "dev.connectx.extra.STRATEGY_SPLIT_OFFSET"
+    const val EXTRA_STRATEGY_DECISION = "dev.connectx.extra.STRATEGY_DECISION"
+    const val EXTRA_STRATEGY_REASON = "dev.connectx.extra.STRATEGY_REASON"
+    const val EXTRA_STRATEGY_BASELINE_LATENCY_MILLIS =
+        "dev.connectx.extra.STRATEGY_BASELINE_LATENCY_MILLIS"
+    const val EXTRA_STRATEGY_LATENCY_MILLIS =
+        "dev.connectx.extra.STRATEGY_LATENCY_MILLIS"
+    const val EXTRA_STRATEGY_RECOVERY_LATENCY_MILLIS =
+        "dev.connectx.extra.STRATEGY_RECOVERY_LATENCY_MILLIS"
+    const val EXTRA_STRATEGY_LATENCY_DELTA_MILLIS =
+        "dev.connectx.extra.STRATEGY_LATENCY_DELTA_MILLIS"
+    const val EXTRA_STRATEGY_ALLOWED_LATENCY_MILLIS =
+        "dev.connectx.extra.STRATEGY_ALLOWED_LATENCY_MILLIS"
+    const val EXTRA_STRATEGY_BASELINE_FAILURE =
+        "dev.connectx.extra.STRATEGY_BASELINE_FAILURE"
+    const val EXTRA_STRATEGY_PHASE_FAILURE =
+        "dev.connectx.extra.STRATEGY_PHASE_FAILURE"
+    const val EXTRA_STRATEGY_RECOVERY_FAILURE =
+        "dev.connectx.extra.STRATEGY_RECOVERY_FAILURE"
+    const val EXTRA_STRATEGY_GATE_STATE = "dev.connectx.extra.STRATEGY_GATE_STATE"
+    const val EXTRA_STRATEGY_COOLDOWN_UNTIL_MILLIS =
+        "dev.connectx.extra.STRATEGY_COOLDOWN_UNTIL_MILLIS"
 
     const val MODE_FOUNDATION = "foundation"
     const val MODE_NATIVE_SELF_TEST = "native_self_test"
@@ -29,6 +50,7 @@ object TunnelContract {
     const val MODE_NATIVE_UDP_PROBE = "native_udp_probe"
     const val MODE_NATIVE_DNS_PROBE = "native_dns_probe"
     const val MODE_NATIVE_TLS_SPLIT_PROBE = "native_tls_split_probe"
+    const val MODE_NATIVE_STRATEGY_EVALUATION = "native_strategy_evaluation"
 
     const val STATUS_STARTED = "started"
     const val STATUS_STOPPED = "stopped"
@@ -36,5 +58,6 @@ object TunnelContract {
     const val STATUS_UDP_PROBE_SUCCEEDED = "udp_probe_succeeded"
     const val STATUS_DNS_PROBE_SUCCEEDED = "dns_probe_succeeded"
     const val STATUS_STRATEGY_PROBE_SUCCEEDED = "strategy_probe_succeeded"
+    const val STATUS_STRATEGY_EVALUATION_COMPLETED = "strategy_evaluation_completed"
     const val STATUS_ERROR = "error"
 }

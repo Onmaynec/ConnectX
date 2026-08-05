@@ -16,6 +16,7 @@ enum class EngineMode {
     NATIVE_UDP_PROBE,
     NATIVE_DNS_PROBE,
     NATIVE_TLS_SPLIT_PROBE,
+    NATIVE_STRATEGY_EVALUATION,
 }
 
 data class NativeBridgeDiagnostics(
@@ -71,6 +72,18 @@ data class StrategyProbeDiagnostics(
     val uploadedBytes: Long? = null,
     val downloadedBytes: Long? = null,
     val relayConnections: Long? = null,
+    val evaluationDecision: String? = null,
+    val evaluationReason: String? = null,
+    val baselineLatencyMillis: Long? = null,
+    val strategyLatencyMillis: Long? = null,
+    val recoveryLatencyMillis: Long? = null,
+    val latencyDeltaMillis: Long? = null,
+    val allowedStrategyLatencyMillis: Long? = null,
+    val baselineFailure: String? = null,
+    val strategyFailure: String? = null,
+    val recoveryFailure: String? = null,
+    val gateState: String? = null,
+    val cooldownUntilElapsedMillis: Long? = null,
     val error: String? = null,
 )
 
@@ -144,6 +157,29 @@ sealed interface ConnectionEvent {
         val abi: String? = null,
     ) : ConnectionEvent
 
+    data class StrategyEvaluationCompleted(
+        val strategyId: String,
+        val segments: Int,
+        val splitOffset: Int,
+        val decision: String,
+        val reason: String,
+        val baselineLatencyMillis: Long?,
+        val strategyLatencyMillis: Long?,
+        val recoveryLatencyMillis: Long?,
+        val latencyDeltaMillis: Long?,
+        val allowedStrategyLatencyMillis: Long?,
+        val baselineFailure: String?,
+        val strategyFailure: String?,
+        val recoveryFailure: String?,
+        val uploadedBytes: Long,
+        val downloadedBytes: Long,
+        val relayConnections: Long,
+        val gateState: String,
+        val cooldownUntilElapsedMillis: Long?,
+        val nativeVersion: String? = null,
+        val abi: String? = null,
+    ) : ConnectionEvent
+
     data object StopRequested : ConnectionEvent
     data object TunnelStopped : ConnectionEvent
 
@@ -177,9 +213,9 @@ object ConnectionStateReducer {
                 running = event.mode == EngineMode.NATIVE_DNS_PROBE,
                 error = null,
             ),
-            strategyProbe = current.strategyProbe.copy(
-                running = event.mode == EngineMode.NATIVE_TLS_SPLIT_PROBE,
-                error = null,
+            strategyProbe = strategyDiagnosticsForStart(
+                current = current.strategyProbe,
+                mode = event.mode,
             ),
             errorMessage = null,
         )
@@ -219,6 +255,8 @@ object ConnectionStateReducer {
                     EngineMode.NATIVE_DNS_PROBE -> "DNS probe проходит через TEST-NET TUN"
                     EngineMode.NATIVE_TLS_SPLIT_PROBE ->
                         "TLS write-split Lab проходит через TEST-NET TUN"
+                    EngineMode.NATIVE_STRATEGY_EVALUATION ->
+                        "A/B/A strategy evaluation проходит через TEST-NET TUN"
                     EngineMode.FOUNDATION -> current.diagnostics.lastResult
                 },
             ),
@@ -234,9 +272,9 @@ object ConnectionStateReducer {
                 running = event.mode == EngineMode.NATIVE_DNS_PROBE,
                 error = null,
             ),
-            strategyProbe = current.strategyProbe.copy(
-                running = event.mode == EngineMode.NATIVE_TLS_SPLIT_PROBE,
-                error = null,
+            strategyProbe = strategyDiagnosticsForStart(
+                current = current.strategyProbe,
+                mode = event.mode,
             ),
             errorMessage = null,
         )
@@ -346,6 +384,44 @@ object ConnectionStateReducer {
             errorMessage = null,
         )
 
+        is ConnectionEvent.StrategyEvaluationCompleted -> current.copy(
+            state = ConnectionState.OFF,
+            mode = EngineMode.FOUNDATION,
+            diagnostics = current.diagnostics.copy(
+                available = true,
+                version = event.nativeVersion ?: current.diagnostics.version,
+                abi = event.abi ?: current.diagnostics.abi,
+                running = false,
+                lastResult = "A/B/A strategy evaluation завершена: ${event.decision}",
+            ),
+            probe = current.probe.copy(running = false),
+            udpProbe = current.udpProbe.copy(running = false),
+            dnsProbe = current.dnsProbe.copy(running = false),
+            strategyProbe = StrategyProbeDiagnostics(
+                running = false,
+                lastSuccess = true,
+                strategyId = event.strategyId,
+                segments = event.segments,
+                splitOffset = event.splitOffset,
+                uploadedBytes = event.uploadedBytes,
+                downloadedBytes = event.downloadedBytes,
+                relayConnections = event.relayConnections,
+                evaluationDecision = event.decision,
+                evaluationReason = event.reason,
+                baselineLatencyMillis = event.baselineLatencyMillis,
+                strategyLatencyMillis = event.strategyLatencyMillis,
+                recoveryLatencyMillis = event.recoveryLatencyMillis,
+                latencyDeltaMillis = event.latencyDeltaMillis,
+                allowedStrategyLatencyMillis = event.allowedStrategyLatencyMillis,
+                baselineFailure = event.baselineFailure,
+                strategyFailure = event.strategyFailure,
+                recoveryFailure = event.recoveryFailure,
+                gateState = event.gateState,
+                cooldownUntilElapsedMillis = event.cooldownUntilElapsedMillis,
+            ),
+            errorMessage = null,
+        )
+
         ConnectionEvent.StopRequested -> current.copy(
             state = ConnectionState.STOPPING,
             errorMessage = null,
@@ -364,6 +440,8 @@ object ConnectionStateReducer {
                     EngineMode.NATIVE_DNS_PROBE -> "DNS probe отменён и ресурсы закрыты"
                     EngineMode.NATIVE_TLS_SPLIT_PROBE ->
                         "TLS write-split Lab отменён и ресурсы закрыты"
+                    EngineMode.NATIVE_STRATEGY_EVALUATION ->
+                        "A/B/A strategy evaluation отменена и ресурсы закрыты"
                     EngineMode.FOUNDATION -> current.diagnostics.lastResult
                 },
             ),
@@ -409,20 +487,33 @@ object ConnectionStateReducer {
                 lastSuccess = if (current.mode == EngineMode.NATIVE_DNS_PROBE) false else current.dnsProbe.lastSuccess,
                 error = if (current.mode == EngineMode.NATIVE_DNS_PROBE) event.message else current.dnsProbe.error,
             ),
-            strategyProbe = current.strategyProbe.copy(
-                running = false,
-                lastSuccess = if (current.mode == EngineMode.NATIVE_TLS_SPLIT_PROBE) {
-                    false
-                } else {
-                    current.strategyProbe.lastSuccess
-                },
-                error = if (current.mode == EngineMode.NATIVE_TLS_SPLIT_PROBE) {
-                    event.message
-                } else {
-                    current.strategyProbe.error
-                },
-            ),
+            strategyProbe = if (current.mode in strategyModes) {
+                StrategyProbeDiagnostics(
+                    running = false,
+                    lastSuccess = false,
+                    error = event.message,
+                )
+            } else {
+                current.strategyProbe.copy(running = false)
+            },
             errorMessage = event.message,
         )
     }
+
+    private fun strategyDiagnosticsForStart(
+        current: StrategyProbeDiagnostics,
+        mode: EngineMode,
+    ): StrategyProbeDiagnostics = if (mode in strategyModes) {
+        StrategyProbeDiagnostics(running = true)
+    } else {
+        current.copy(
+            running = false,
+            error = null,
+        )
+    }
+
+    private val strategyModes = setOf(
+        EngineMode.NATIVE_TLS_SPLIT_PROBE,
+        EngineMode.NATIVE_STRATEGY_EVALUATION,
+    )
 }
