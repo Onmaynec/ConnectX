@@ -1,12 +1,11 @@
 name: Publish v0.3.0-alpha.3
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - docs/releases/v0.3.0-alpha.3.publish
-  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - Android CI
+    types:
+      - completed
 
 permissions:
   actions: read
@@ -17,107 +16,132 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  await_android_ci:
-    name: Await exact Android CI
+  select-release:
+    name: Select exact alpha.3 activation
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 5
     outputs:
-      run_id: ${{ steps.await.outputs.run_id }}
+      activated: ${{ steps.select.outputs.activated }}
+      target_sha: ${{ steps.select.outputs.target_sha }}
+      run_id: ${{ steps.select.outputs.run_id }}
+    env:
+      TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      MARKER_PATH: docs/releases/v0.3.0-alpha.3.publish
 
     steps:
-      - name: Wait for successful Android CI on exact commit
-        id: await
+      - name: Checkout exact successful commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 2
+
+      - name: Select trusted marker activation
+        id: select
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET_SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 140); do
-            runs_json="$(gh run list \
-              --repo "$GITHUB_REPOSITORY" \
-              --workflow "Android CI" \
-              --commit "$TARGET_SHA" \
-              --limit 20 \
-              --json databaseId,status,conclusion,event,headSha)"
+          echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
 
-            selected="$(jq -c \
-              --arg sha "$TARGET_SHA" \
-              '[.[] | select(.headSha == $sha and .event == "push")] | sort_by(.databaseId) | last // empty' \
-              <<<"$runs_json")"
+          actual_sha="$(git rev-parse HEAD)"
+          if [[ "$actual_sha" != "$TARGET_SHA" ]]; then
+            echo "Checked out $actual_sha, expected $TARGET_SHA."
+            exit 1
+          fi
 
-            if [[ -z "$selected" ]]; then
-              echo "Android CI push run for $TARGET_SHA is not visible yet ($attempt/140)."
-              sleep 30
-              continue
-            fi
+          run_json="$(gh run view "$RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json name,status,conclusion,event,headSha)"
+          test "$(jq -r '.name' <<<"$run_json")" = "Android CI"
+          test "$(jq -r '.status' <<<"$run_json")" = "completed"
+          test "$(jq -r '.conclusion' <<<"$run_json")" = "success"
+          test "$(jq -r '.event' <<<"$run_json")" = "push"
+          test "$(jq -r '.headSha' <<<"$run_json")" = "$TARGET_SHA"
 
-            run_id="$(jq -r '.databaseId' <<<"$selected")"
-            status="$(jq -r '.status' <<<"$selected")"
-            conclusion="$(jq -r '.conclusion // ""' <<<"$selected")"
-            echo "Android CI run $run_id: status=$status conclusion=$conclusion"
-
-            if [[ "$status" != "completed" ]]; then
-              sleep 30
-              continue
-            fi
-            if [[ "$conclusion" != "success" ]]; then
-              echo "Exact-commit Android CI did not pass; release is blocked."
-              exit 1
-            fi
-
-            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          parent_sha="$(git rev-parse "$TARGET_SHA^1")"
+          git diff --name-only "$parent_sha" "$TARGET_SHA" | tee release-changed-files.txt
+          if ! grep -Fxq "$MARKER_PATH" release-changed-files.txt; then
+            echo "activated=false" >> "$GITHUB_OUTPUT"
+            echo "This successful main CI run did not change the alpha.3 publish marker; skipping."
             exit 0
-          done
+          fi
 
-          echo "Timed out waiting for exact-commit Android CI."
-          exit 1
+          test -s "$MARKER_PATH"
+          grep -Fq 'Publish ConnectX v0.3.0-alpha.3' "$MARKER_PATH"
+          echo "activated=true" >> "$GITHUB_OUTPUT"
 
-  prepare_and_publish:
-    name: Prepare and publish prerelease
-    needs: await_android_ci
+  prepare-and-publish:
+    name: Publish exact successful Android CI output
+    needs: select-release
+    if: ${{ needs.select-release.outputs.activated == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    env:
+      TARGET_SHA: ${{ needs.select-release.outputs.target_sha }}
+      RUN_ID: ${{ needs.select-release.outputs.run_id }}
+      TAG_NAME: v0.3.0-alpha.3
+      MARKER_PATH: docs/releases/v0.3.0-alpha.3.publish
 
     steps:
       - name: Checkout exact release commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.select-release.outputs.target_sha }}
 
       - name: Verify release metadata and safety docs
         shell: bash
         run: |
           set -euo pipefail
-          grep -q 'versionCode = 10' app/build.gradle.kts
-          grep -q 'versionName = "0.3.0-alpha.3"' app/build.gradle.kts
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          grep -Fq 'Publish ConnectX v0.3.0-alpha.3' "$MARKER_PATH"
+          grep -Fq 'versionCode = 10' app/build.gradle.kts
+          grep -Fq 'versionName = "0.3.0-alpha.3"' app/build.gradle.kts
+          grep -Fq '## [0.3.0-alpha.3]' CHANGELOG.md
           test -s docs/releases/v0.3.0-alpha.3.md
           test -s docs/architecture/external-tls-evidence.md
-          grep -q '192.0.2.0/24' docs/architecture/external-tls-evidence.md
-          grep -q 'does not claim a universal' docs/releases/v0.3.0-alpha.3.md
+          grep -Fq '192.0.2.0/24' docs/architecture/external-tls-evidence.md
+          grep -Fq 'does not claim a universal' docs/releases/v0.3.0-alpha.3.md
+          if grep -Fq 'Current infrastructure limitation' docs/releases/v0.3.0-alpha.3.md; then
+            echo "Release notes still contain the obsolete runner blocker."
+            exit 1
+          fi
           test -s THIRD_PARTY_NOTICES.md
           test -s licenses/tun2socks-MIT.txt
           test -s licenses/gvisor-LICENSE.txt
-          test ! -e docs/releases/v0.3.0-alpha.3.publish || \
-            grep -q 'Publish v0.3.0-alpha.3' docs/releases/v0.3.0-alpha.3.publish
+          test ! -e .github/workflows/cancel-stale-alpha3-publishers.yml
+          test ! -e docs/releases/v0.3.0-alpha.3.cancel-stale
 
       - name: Download exact Android CI artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ needs.await_android_ci.outputs.run_id }}
-          TARGET_SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p downloaded/apk downloaded/native
-          gh run download "$RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name "connectx-debug-$TARGET_SHA" \
-            --dir downloaded/apk
-          gh run download "$RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name "connectx-native-$TARGET_SHA" \
-            --dir downloaded/native
+          for attempt in 1 2 3 4 5; do
+            rm -rf downloaded
+            mkdir -p downloaded/apk downloaded/native
+            if gh run download "$RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "connectx-debug-$TARGET_SHA" \
+              --dir downloaded/apk && \
+              gh run download "$RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "connectx-native-$TARGET_SHA" \
+              --dir downloaded/native; then
+              break
+            fi
+
+            if (( attempt == 5 )); then
+              echo "Exact Android CI artifacts were unavailable after $attempt attempts."
+              exit 1
+            fi
+            sleep $((attempt * 10))
+          done
+
           test -s downloaded/apk/app-debug.apk
           test -s downloaded/native/jniLibs/arm64-v8a/libconnectxbridge.so
           test -s downloaded/native/jniLibs/x86_64/libconnectxbridge.so
@@ -127,11 +151,11 @@ jobs:
         run: |
           set -euo pipefail
           unzip -l downloaded/apk/app-debug.apk | tee apk-contents.txt
-          grep -q 'lib/arm64-v8a/libconnectxbridge.so' apk-contents.txt
-          grep -q 'lib/x86_64/libconnectxbridge.so' apk-contents.txt
-          grep -q 'assets/THIRD_PARTY_NOTICES.md' apk-contents.txt
-          grep -q 'assets/tun2socks-MIT.txt' apk-contents.txt
-          grep -q 'assets/gvisor-LICENSE.txt' apk-contents.txt
+          grep -Fq 'lib/arm64-v8a/libconnectxbridge.so' apk-contents.txt
+          grep -Fq 'lib/x86_64/libconnectxbridge.so' apk-contents.txt
+          grep -Fq 'assets/THIRD_PARTY_NOTICES.md' apk-contents.txt
+          grep -Fq 'assets/tun2socks-MIT.txt' apk-contents.txt
+          grep -Fq 'assets/gvisor-LICENSE.txt' apk-contents.txt
 
       - name: Prepare deterministic release assets and checksums
         shell: bash
@@ -156,7 +180,7 @@ jobs:
       - name: Upload prepared release assets
         uses: actions/upload-artifact@v4
         with:
-          name: strategy-alpha3-release-assets-${{ github.sha }}
+          name: strategy-alpha3-release-assets-${{ needs.select-release.outputs.target_sha }}
           path: release-assets
           if-no-files-found: error
           retention-days: 14
@@ -164,8 +188,6 @@ jobs:
       - name: Publish or verify GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_NAME: v0.3.0-alpha.3
-          TARGET_SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -228,10 +250,7 @@ jobs:
             metadata="$(gh release view "$TAG_NAME" \
               --repo "$GITHUB_REPOSITORY" \
               --json isPrerelease)"
-            if [[ "$(jq -r '.isPrerelease' <<<"$metadata")" != "true" ]]; then
-              echo "Existing release $TAG_NAME is not marked as a prerelease."
-              exit 1
-            fi
+            test "$(jq -r '.isPrerelease' <<<"$metadata")" = "true"
 
             verify_or_upload_assets
             gh release edit "$TAG_NAME" \
