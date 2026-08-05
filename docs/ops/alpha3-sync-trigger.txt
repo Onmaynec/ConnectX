@@ -1,0 +1,1 @@
+Trigger the temporary alpha.3 merge inspector after the workflow was installed on main.
