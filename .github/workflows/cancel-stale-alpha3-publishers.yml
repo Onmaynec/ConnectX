@@ -1,0 +1,23 @@
+name: Cancel stale v0.3.0-alpha.3 publishers
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docs/releases/v0.3.0-alpha.3.cancel-stale
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-v0.3.0-alpha.3
+  cancel-in-progress: true
+
+jobs:
+  cancel-stale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Confirm stale publisher cancellation
+        run: echo "Stale alpha.3 publisher runs were superseded before final activation."
