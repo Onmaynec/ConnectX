@@ -1,0 +1,1 @@
+Publisher migration: polling was replaced by an exact workflow_run handoff from the successful Android CI push run. This note is temporary PR evidence and must be removed before merge.
