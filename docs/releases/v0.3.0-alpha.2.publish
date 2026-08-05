@@ -1,0 +1,1 @@
+Publish v0.3.0-alpha.2 from the exact main commit after Android CI passes build, unit tests, lint, APK payload verification, Strategy Foundation, TLS split, A/B/A evaluation, JNI, TCP, UDP and DNS runtime gates.
