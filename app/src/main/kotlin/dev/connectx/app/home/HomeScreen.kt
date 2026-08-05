@@ -28,9 +28,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.connectx.app.BuildConfig
 import dev.connectx.core.model.ConnectionState
 import dev.connectx.core.model.ConnectionUiState
 import dev.connectx.core.model.EngineMode
+import dev.connectx.strategy.api.TlsClientHelloSplitStrategy
+
+private val labStrategyDescriptor = TlsClientHelloSplitStrategy().descriptor
 
 @Composable
 fun HomeScreen(
@@ -40,6 +44,7 @@ fun HomeScreen(
     onNativeTcpProbe: () -> Unit,
     onNativeUdpProbe: () -> Unit,
     onNativeDnsProbe: () -> Unit,
+    onNativeTlsSplitProbe: () -> Unit,
 ) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -122,7 +127,7 @@ fun HomeScreen(
                 Box(modifier = Modifier.padding(20.dp)) {
                     Column {
                         Text(
-                            text = "Native diagnostics · v0.2.0-a6",
+                            text = "Native diagnostics · v${BuildConfig.VERSION_NAME}",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -192,6 +197,21 @@ fun HomeScreen(
                                 textAlign = TextAlign.Center,
                             )
                         }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onNativeTlsSplitProbe,
+                            enabled = diagnosticsActionEnabled(uiState),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = if (uiState.strategyProbe.running) {
+                                    "TLS write-split Lab выполняется"
+                                } else {
+                                    "Проверить TLS write-split (Lab)"
+                                },
+                                textAlign = TextAlign.Center,
+                            )
+                        }
                     }
                 }
             }
@@ -211,6 +231,7 @@ private fun statusTitle(uiState: ConnectionUiState): String = when (uiState.stat
         EngineMode.NATIVE_TCP_PROBE -> "Подготовка TCP probe"
         EngineMode.NATIVE_UDP_PROBE -> "Подготовка UDP probe"
         EngineMode.NATIVE_DNS_PROBE -> "Подготовка DNS probe"
+        EngineMode.NATIVE_TLS_SPLIT_PROBE -> "Подготовка TLS write-split Lab"
         EngineMode.FOUNDATION -> "Запуск сетевого ядра"
     }
 
@@ -219,6 +240,7 @@ private fun statusTitle(uiState: ConnectionUiState): String = when (uiState.stat
         EngineMode.NATIVE_TCP_PROBE -> "TCP-пакет проходит через TUN"
         EngineMode.NATIVE_UDP_PROBE -> "UDP-пакет проходит через TUN"
         EngineMode.NATIVE_DNS_PROBE -> "DNS-запрос проходит через TUN"
+        EngineMode.NATIVE_TLS_SPLIT_PROBE -> "TLS write-split Lab проходит через TUN"
         EngineMode.FOUNDATION -> "Сетевое ядро готово"
     }
 
@@ -309,14 +331,47 @@ private fun diagnosticsText(uiState: ConnectionUiState): String {
         false -> listOfNotNull(uiState.dnsProbe.error?.let { "DNS probe: $it" })
         null -> emptyList()
     }
+    val strategyDetails = when (uiState.strategyProbe.lastSuccess) {
+        true -> listOfNotNull(
+            uiState.strategyProbe.strategyId?.let { "Strategy Lab: $it" },
+            if (
+                uiState.strategyProbe.segments != null &&
+                uiState.strategyProbe.splitOffset != null
+            ) {
+                "Write plan: ${uiState.strategyProbe.segments} сегмента · split ${uiState.strategyProbe.splitOffset} Б"
+            } else {
+                null
+            },
+            uiState.strategyProbe.latencyMillis?.let { "TLS split probe: ${it} мс" },
+            if (
+                uiState.strategyProbe.uploadedBytes != null &&
+                uiState.strategyProbe.downloadedBytes != null
+            ) {
+                "TLS relay: ↑${uiState.strategyProbe.uploadedBytes} Б · ↓${uiState.strategyProbe.downloadedBytes} Б"
+            } else {
+                null
+            },
+            uiState.strategyProbe.relayConnections?.let { "TLS relay connections: $it" },
+        )
 
-    val safety = "Диагностика использует только 192.0.2.0/24; системный DNS и обычный интернет-трафик не перехватываются."
+        false -> listOfNotNull(
+            uiState.strategyProbe.error?.let { "TLS write-split Lab: $it" },
+        )
+
+        null -> listOf(
+            "Strategy lab: ${labStrategyDescriptor.id} · выключена вне явного Lab probe",
+        )
+    }
+
+    val safety =
+        "Lab проверяет два write() через 192.0.2.0/24; это не доказательство двух TCP-пакетов и не перехват обычного трафика."
     return (
         listOf(availability) +
             nativeDetails +
             tcpProbeDetails +
             udpProbeDetails +
             dnsProbeDetails +
+            strategyDetails +
             safety
         )
         .filter { it.isNotBlank() }

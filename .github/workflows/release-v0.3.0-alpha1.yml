@@ -1,26 +1,26 @@
-name: Android CI
+name: Publish v0.3.0-alpha.1
 
 on:
-  pull_request:
   push:
     branches:
       - main
+    paths:
+      - docs/releases/v0.3.0-alpha.1.publish
+  workflow_dispatch:
 
 permissions:
-  contents: read
-
-concurrency:
-  group: android-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  contents: write
 
 jobs:
-  build:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
 
     steps:
-      - name: Checkout
+      - name: Checkout exact release commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -42,41 +42,34 @@ jobs:
           yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;28.0.13004108"
 
-      - name: Test committed Go dependency lock
-        working-directory: engine/go
+      - name: Verify and build locked native bridge
         shell: bash
         run: |
+          cd engine/go
           go mod download
           go mod verify
           go test -mod=readonly ./bridge
           git diff --exit-code -- go.mod go.sum
-
-      - name: Build Android native bridge
-        shell: bash
-        run: |
+          cd ../..
           chmod +x engine/go/build-android.sh
           engine/go/build-android.sh "$ANDROID_SDK_ROOT/ndk/28.0.13004108"
           test -s engine/go/build/android/jniLibs/arm64-v8a/libconnectxbridge.so
           test -s engine/go/build/android/jniLibs/x86_64/libconnectxbridge.so
-          file engine/go/build/android/jniLibs/*/libconnectxbridge.so
 
       - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.13"
 
-      - name: Unit tests
-        run: gradle --no-daemon test
+      - name: Run strategy, JVM and lint gates
+        run: |
+          gradle test --no-daemon
+          gradle lintDebug --no-daemon
 
-      - name: Android lint
-        run: gradle --no-daemon lintDebug
-
-      - name: Assemble debug APK
-        run: gradle --no-daemon :app:assembleDebug
-
-      - name: Verify native and legal APK payloads
+      - name: Build and verify APK
         shell: bash
         run: |
+          gradle :app:assembleDebug --no-daemon
           unzip -l app/build/outputs/apk/debug/app-debug.apk | tee apk-contents.txt
           grep -q 'lib/arm64-v8a/libconnectxbridge.so' apk-contents.txt
           grep -q 'lib/x86_64/libconnectxbridge.so' apk-contents.txt
@@ -84,36 +77,52 @@ jobs:
           grep -q 'assets/tun2socks-MIT.txt' apk-contents.txt
           grep -q 'assets/gvisor-LICENSE.txt' apk-contents.txt
 
-      - name: Upload debug APK
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          cp app/build/outputs/apk/debug/app-debug.apk \
+            release-assets/ConnectX-v0.3.0-alpha.1-debug.apk
+          (cd engine/go/build/android && \
+            zip -r "$GITHUB_WORKSPACE/release-assets/ConnectX-v0.3.0-alpha.1-native.zip" .)
+          cp THIRD_PARTY_NOTICES.md \
+            release-assets/THIRD_PARTY_NOTICES-v0.3.0-alpha.1.md
+          cp licenses/tun2socks-MIT.txt release-assets/tun2socks-MIT.txt
+          cp licenses/gvisor-LICENSE.txt release-assets/gvisor-LICENSE.txt
+          (cd release-assets && sha256sum * > CHECKSUMS.txt)
+
+      - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
-          name: connectx-debug-${{ github.sha }}
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: strategy-alpha1-release-assets-${{ github.sha }}
+          path: release-assets
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload native bridge
+      - name: Upload native runtime payload
         uses: actions/upload-artifact@v4
         with:
-          name: connectx-native-${{ github.sha }}
+          name: strategy-alpha1-native-${{ github.sha }}
           path: engine/go/build/android
           if-no-files-found: error
           retention-days: 14
 
   android-runtime-smoke:
-    needs: build
+    needs: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
 
     steps:
-      - name: Checkout
+      - name: Checkout exact release commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - name: Configure Android runtime paths
         shell: bash
         run: |
-          echo "ANDROID_AVD_HOME=$RUNNER_TEMP/connectx-avd" >> "$GITHUB_ENV"
-          echo "ANDROID_USER_HOME=$RUNNER_TEMP/connectx-android-user" >> "$GITHUB_ENV"
+          echo "ANDROID_AVD_HOME=$RUNNER_TEMP/connectx-strategy-alpha1-release-avd" >> "$GITHUB_ENV"
+          echo "ANDROID_USER_HOME=$RUNNER_TEMP/connectx-strategy-alpha1-release-user" >> "$GITHUB_ENV"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -126,10 +135,10 @@ jobs:
         with:
           gradle-version: "8.13"
 
-      - name: Download verified native bridge
+      - name: Download verified native runtime payload
         uses: actions/download-artifact@v4
         with:
-          name: connectx-native-${{ github.sha }}
+          name: strategy-alpha1-native-${{ github.sha }}
           path: engine/go/build/android
 
       - name: Free runtime runner disk
@@ -165,11 +174,11 @@ jobs:
           echo no | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" \
             create avd \
             --force \
-            --name connectx-ci \
-            --path "$ANDROID_AVD_HOME/connectx-ci.avd" \
+            --name connectx-strategy-alpha1-release \
+            --path "$ANDROID_AVD_HOME/connectx-strategy-alpha1-release.avd" \
             --package "system-images;android-35;google_apis;x86_64"
           "$ANDROID_SDK_ROOT/emulator/emulator" -list-avds | tee avd-list.txt
-          grep -qx 'connectx-ci' avd-list.txt
+          grep -qx 'connectx-strategy-alpha1-release' avd-list.txt
           df -h / | tee disk-before-emulator.txt
 
       - name: Start emulator and wait for Android
@@ -178,7 +187,7 @@ jobs:
           ADB="$ANDROID_SDK_ROOT/platform-tools/adb"
           EMULATOR="$ANDROID_SDK_ROOT/emulator/emulator"
           nohup "$EMULATOR" \
-            -avd connectx-ci \
+            -avd connectx-strategy-alpha1-release \
             -accel on \
             -memory 2048 \
             -no-window \
@@ -219,7 +228,7 @@ jobs:
           "$ADB" shell getprop ro.product.cpu.abi
           "$ADB" shell getprop ro.build.version.sdk
 
-      - name: Run isolated strategy foundation, TLS split TUN, JNI, TCP, UDP and DNS gates
+      - name: Run isolated strategy, JNI, TCP, UDP and DNS release gates
         shell: bash
         run: |
           set -euo pipefail
@@ -240,7 +249,6 @@ jobs:
             "$ADB" shell am force-stop dev.connectx || true
             "$ADB" shell am force-stop dev.connectx.test || true
             "$ADB" shell appops set dev.connectx ACTIVATE_VPN default || true
-
             local deadline=$((SECONDS + 10))
             while (( SECONDS < deadline )); do
               if [[ -z "$("$ADB" shell pidof dev.connectx 2>/dev/null | tr -d '\r')" ]]; then
@@ -277,15 +285,9 @@ jobs:
           gradle --no-daemon :vpn:nativebridge:connectedDebugAndroidTest
           reset_vpn_process
 
-          run_app_gate \
-            tcp \
-            dev.connectx.app.NativeTcpProbeInstrumentedTest
-          run_app_gate \
-            udp \
-            dev.connectx.app.NativeUdpProbeInstrumentedTest
-          run_app_gate \
-            dns \
-            dev.connectx.app.NativeDnsProbeInstrumentedTest
+          run_app_gate tcp dev.connectx.app.NativeTcpProbeInstrumentedTest
+          run_app_gate udp dev.connectx.app.NativeUdpProbeInstrumentedTest
+          run_app_gate dns dev.connectx.app.NativeDnsProbeInstrumentedTest
 
       - name: Collect emulator diagnostics
         if: always()
@@ -316,7 +318,44 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: connectx-emulator-smoke-${{ github.sha }}
+          name: strategy-alpha1-emulator-smoke-${{ github.sha }}
           path: emulator-diagnostics
           if-no-files-found: warn
           retention-days: 14
+
+  publish:
+    needs:
+      - verify
+      - android-runtime-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout release notes
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: strategy-alpha1-release-assets-${{ github.sha }}
+          path: release-assets
+
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: v0.3.0-alpha.1
+          TARGET_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release $TAG_NAME already exists; nothing to do."
+            exit 0
+          fi
+          gh release create "$TAG_NAME" \
+            release-assets/* \
+            --target "$TARGET_SHA" \
+            --title "ConnectX v0.3.0-alpha.1 — Strategy Foundation and TLS Write-Split Lab" \
+            --notes-file docs/releases/v0.3.0-alpha.1.md \
+            --prerelease

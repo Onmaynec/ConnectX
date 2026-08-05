@@ -6,8 +6,64 @@ All notable changes to ConnectX are documented in this file.
 
 ### Planned
 
+- Transport-level observation of actual TCP segment boundaries.
 - Physical-device repeated TUN lifecycle verification.
-- First verified DPI-obfuscation strategy.
+- First strategy verified on a reproducible restricted network.
+
+## [0.3.0-alpha.1]
+
+### Added
+
+- New pure Kotlin `:strategy:api` module.
+- Typed `BypassStrategy` contract and canonical strategy identifiers.
+- Capability model for TCP, UDP, IPv4, IPv6, TLS, QUIC and root.
+- Typed execution context separating lab-only and user-traffic scopes.
+- Global strategy feature gate disabled by default.
+- Immutable strategy registry with duplicate-id rejection.
+- First lab-only strategy descriptor: `tls-clienthello-split-v1`.
+- Bounded TLS record and ClientHello inspector.
+- Deterministic two-write split plan after the ClientHello fixed prefix.
+- Lossless payload reconstruction helper with defensive segment copies.
+- Exact TEST-NET TLS lab target limited to `192.0.2.1:18443`.
+- Android foreground `VpnService` path: synthetic ClientHello → two ordered writes → TUN → gVisor/tun2socks → authenticated relay → loopback echo.
+- Protected relay connection to the process-local echo endpoint.
+- Manual Compose control labelled `TLS write-split (Lab)`.
+- Typed strategy diagnostics: strategy id, write count, split offset, latency, bytes and relay connections.
+- JVM unit tests for parser boundaries, feature gates, registry invariants and reconstruction.
+- Reducer tests for strategy start, completion and scoped failure states.
+- Isolated Android instrumentation gate proving the planner is packaged and disabled by default.
+- Isolated Android instrumentation gate verifying the lossless two-write stream through the real TEST-NET TUN path.
+- Version-aware Compose diagnostics.
+- Application version `0.3.0-alpha.1`, versionCode `8`.
+
+### Rejected inputs
+
+- feature-disabled execution;
+- ordinary user-traffic scope;
+- repeated planning of an already handled payload;
+- UDP, IPv6, QUIC and unknown application contexts;
+- non-handshake TLS records;
+- non-ClientHello handshakes;
+- unsupported TLS record versions;
+- truncated records;
+- mismatched record or handshake lengths;
+- trailing data and payloads larger than the bounded lab limit;
+- every strategy-lab target except `192.0.2.1:18443`.
+
+### Safety boundaries
+
+- The strategy is activated only by an explicit lab action and is not connected to ordinary device traffic.
+- The global feature gate remains disabled by default and the first strategy rejects `USER_TRAFFIC` scope.
+- Two socket writes are not claimed to equal two TCP segments or two IP packets on the wire.
+- TUN capture remains limited to TEST-NET-1 (`192.0.2.0/24`).
+- No default IPv4 or IPv6 route is added.
+- The strategy endpoint and authenticated relay bind only to `127.0.0.1` after exact target rewriting.
+- System DNS traffic is not intercepted and no external resolver is contacted.
+- TLS is not decrypted, semantically modified or intercepted with custom certificates.
+- Payloads, query names and SOCKS credentials are not logged.
+- No remote ConnectX server is used.
+- The unchanged native transport bridge keeps its `0.2.0-alpha.6` component version.
+- This release does not claim working censorship bypass.
 
 ## [0.2.0-alpha.6]
 

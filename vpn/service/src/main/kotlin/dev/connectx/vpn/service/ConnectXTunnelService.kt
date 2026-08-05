@@ -13,6 +13,15 @@ import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
+import dev.connectx.strategy.api.ApplicationProtocol
+import dev.connectx.strategy.api.LabTlsClientHello
+import dev.connectx.strategy.api.NetworkProtocol
+import dev.connectx.strategy.api.StrategyContext
+import dev.connectx.strategy.api.StrategyFeatureGate
+import dev.connectx.strategy.api.StrategyPlan
+import dev.connectx.strategy.api.StrategyScope
+import dev.connectx.strategy.api.TlsClientHelloSplitStrategy
+import dev.connectx.strategy.api.TransportProtocol
 import dev.connectx.vpn.api.TunnelContract
 import dev.connectx.vpn.nativebridge.NativeTunBridge
 import dev.connectx.vpn.nativebridge.NativeTunSession
@@ -105,10 +114,20 @@ class ConnectXTunnelService : VpnService() {
         }
 
         try {
-            val tcpEchoPort = if (mode == TunnelContract.MODE_NATIVE_TCP_PROBE) {
+            val tcpEchoPort = if (
+                mode == TunnelContract.MODE_NATIVE_TCP_PROBE ||
+                mode == TunnelContract.MODE_NATIVE_TLS_SPLIT_PROBE
+            ) {
                 startTcpProbeEchoServer()
             } else {
                 null
+            }
+            val tcpProbeSource = when (mode) {
+                TunnelContract.MODE_NATIVE_TCP_PROBE ->
+                    RelayTarget(TCP_PROBE_TEST_HOST, TCP_PROBE_TEST_PORT)
+                TunnelContract.MODE_NATIVE_TLS_SPLIT_PROBE ->
+                    RelayTarget(TLS_SPLIT_TEST_HOST, TLS_SPLIT_TEST_PORT)
+                else -> null
             }
             val udpEchoPort = if (mode == TunnelContract.MODE_NATIVE_UDP_PROBE) {
                 startUdpProbeEchoServer()
@@ -117,6 +136,7 @@ class ConnectXTunnelService : VpnService() {
             }
             val relayPort = startDirectRelay(
                 tcpProbeEchoPort = tcpEchoPort,
+                tcpProbeSource = tcpProbeSource,
                 udpProbeEchoPort = udpEchoPort,
             )
             val tunnel = establishTestTunnel()
@@ -138,6 +158,7 @@ class ConnectXTunnelService : VpnService() {
             when (mode) {
                 TunnelContract.MODE_NATIVE_TCP_PROBE -> launchNativeTcpProbe()
                 TunnelContract.MODE_NATIVE_UDP_PROBE -> launchNativeUdpProbe()
+                TunnelContract.MODE_NATIVE_TLS_SPLIT_PROBE -> launchNativeTlsSplitProbe()
             }
         } catch (error: Throwable) {
             val cleanupError = closeTunnelResources()
@@ -156,6 +177,7 @@ class ConnectXTunnelService : VpnService() {
         TunnelContract.MODE_NATIVE_SELF_TEST,
         TunnelContract.MODE_NATIVE_TCP_PROBE,
         TunnelContract.MODE_NATIVE_UDP_PROBE,
+        TunnelContract.MODE_NATIVE_TLS_SPLIT_PROBE,
         -> mode
 
         else -> error("Неизвестный режим локального движка")
@@ -179,11 +201,11 @@ class ConnectXTunnelService : VpnService() {
     }
 
     private fun establishTestTunnel(): ParcelFileDescriptor = Builder()
-        .setSession("ConnectX v0.2 alpha diagnostics")
+        .setSession("ConnectX v0.3 alpha diagnostics")
         .setMtu(DEFAULT_MTU)
         .addAddress(LOCAL_TUN_ADDRESS, LOCAL_TUN_PREFIX)
-        // alpha.5 intentionally keeps only TEST-NET-1. Ordinary application
-        // traffic cannot enter the unfinished native stack.
+        // Strategy alpha intentionally keeps only TEST-NET-1. Ordinary
+        // application traffic cannot enter the lab strategy path.
         .addRoute(TEST_ROUTE, TEST_ROUTE_PREFIX)
         .setBlocking(false)
         .establish()
@@ -207,6 +229,7 @@ class ConnectXTunnelService : VpnService() {
 
     private fun startDirectRelay(
         tcpProbeEchoPort: Int?,
+        tcpProbeSource: RelayTarget?,
         udpProbeEchoPort: Int?,
     ): Int {
         directTcpRelay?.let { relay ->
@@ -214,11 +237,11 @@ class ConnectXTunnelService : VpnService() {
         }
 
         val credentials = Socks5Credentials.random()
-        val tcpTargetResolver = if (tcpProbeEchoPort == null) {
+        val tcpTargetResolver = if (tcpProbeEchoPort == null || tcpProbeSource == null) {
             RelayTargetResolver.IDENTITY
         } else {
             ExactRelayTargetOverride(
-                source = RelayTarget(TCP_PROBE_TEST_HOST, TCP_PROBE_TEST_PORT),
+                source = tcpProbeSource,
                 destination = RelayTarget(RELAY_HOST, tcpProbeEchoPort),
             )
         }
@@ -352,6 +375,109 @@ class ConnectXTunnelService : VpnService() {
             if (tcpProbeSocket === socket) tcpProbeSocket = null
             runCatching { socket.close() }
         }
+    }
+
+    private fun launchNativeTlsSplitProbe() {
+        val generation = nextProbeGeneration()
+        val thread = Thread(
+            {
+                val result = runCatching { executeNativeTlsSplitProbe() }
+                mainHandler.post {
+                    completeNativeTlsSplitProbe(generation, result)
+                }
+            },
+            "connectx-native-tls-split-probe",
+        ).apply { isDaemon = true }
+        probeThread = thread
+        thread.start()
+    }
+
+    private fun executeNativeTlsSplitProbe(): StrategyProbeResult {
+        check(activeMode == TunnelContract.MODE_NATIVE_TLS_SPLIT_PROBE)
+        check(NativeTunBridge.isRunning()) {
+            "Native bridge остановился до TLS split probe"
+        }
+
+        val strategy = TlsClientHelloSplitStrategy()
+        val payload = buildSyntheticClientHello()
+        val plan = strategy.plan(
+            payload = payload,
+            context = StrategyContext(
+                transport = TransportProtocol.TCP,
+                network = NetworkProtocol.IPV4,
+                application = ApplicationProtocol.TLS,
+                scope = StrategyScope.LAB_ONLY,
+            ),
+            featureGate = StrategyFeatureGate(
+                globallyEnabled = true,
+                enabledStrategies = setOf(strategy.descriptor.id),
+            ),
+        )
+        check(plan is StrategyPlan.Segmented) {
+            "TLS split strategy отказалась от валидного lab ClientHello: $plan"
+        }
+        check(payload.contentEquals(plan.reconstruct())) {
+            "TLS split strategy изменила reconstructed ClientHello"
+        }
+
+        val socket = Socket()
+        tcpProbeSocket = socket
+        val startedAt = SystemClock.elapsedRealtimeNanos()
+        try {
+            socket.tcpNoDelay = true
+            socket.soTimeout = PROBE_TIMEOUT_MILLIS
+            // The socket is intentionally unprotected so the exact TEST-NET
+            // target traverses Android TUN and the native userspace stack.
+            socket.connect(
+                InetSocketAddress(TLS_SPLIT_TEST_HOST, TLS_SPLIT_TEST_PORT),
+                PROBE_TIMEOUT_MILLIS,
+            )
+            val output = socket.getOutputStream()
+            plan.segments.forEachIndexed { index, segment ->
+                output.write(segment)
+                output.flush()
+                if (index + 1 < plan.segments.size) {
+                    Thread.sleep(TLS_SPLIT_WRITE_GAP_MILLIS)
+                }
+            }
+
+            val echoed = ByteArray(payload.size)
+            DataInputStream(socket.getInputStream()).readFully(echoed)
+            check(payload.contentEquals(echoed)) {
+                "TLS split probe получил изменённый reconstructed ClientHello"
+            }
+
+            val latencyMillis = elapsedMillisSince(startedAt)
+            val stats = awaitTcpProbeRelayStats(payload.size.toLong())
+            check(stats.acceptedConnections >= 1L) {
+                "Relay не подтвердил TLS split probe соединение"
+            }
+            check(stats.uploadedBytes >= payload.size.toLong()) {
+                "Relay не подтвердил отправленные байты TLS split probe"
+            }
+            check(stats.downloadedBytes >= payload.size.toLong()) {
+                "Relay не подтвердил полученные байты TLS split probe"
+            }
+
+            return StrategyProbeResult(
+                strategyId = strategy.descriptor.id.value,
+                segments = plan.segments.size,
+                splitOffset = plan.splitOffset,
+                latencyMillis = latencyMillis,
+                uploadedBytes = stats.uploadedBytes,
+                downloadedBytes = stats.downloadedBytes,
+                relayConnections = stats.acceptedConnections,
+            )
+        } finally {
+            if (tcpProbeSocket === socket) tcpProbeSocket = null
+            runCatching { socket.close() }
+        }
+    }
+
+    private fun buildSyntheticClientHello(): ByteArray {
+        val randomBytes = ByteArray(LabTlsClientHello.RANDOM_BYTES)
+            .also(secureRandom::nextBytes)
+        return LabTlsClientHello.create(randomBytes)
     }
 
     private fun launchNativeUdpProbe() {
@@ -528,6 +654,43 @@ class ConnectXTunnelService : VpnService() {
         stopSelf()
     }
 
+    private fun completeNativeTlsSplitProbe(
+        generation: Long,
+        outcome: Result<StrategyProbeResult>,
+    ) {
+        if (
+            generation != probeGeneration ||
+            activeMode != TunnelContract.MODE_NATIVE_TLS_SPLIT_PROBE
+        ) {
+            return
+        }
+
+        val completedVersion = nativeVersion
+        val cleanupError = closeTunnelResources()
+        val result = outcome.getOrNull()
+        if (result != null && cleanupError == null) {
+            publishStatus(
+                status = TunnelContract.STATUS_STRATEGY_PROBE_SUCCEEDED,
+                mode = TunnelContract.MODE_NATIVE_TLS_SPLIT_PROBE,
+                nativeVersion = completedVersion,
+                strategyProbeResult = result,
+            )
+        } else {
+            val primary = outcome.exceptionOrNull()
+                ?: IllegalStateException(
+                    "TLS split probe завершён, но ресурсы закрылись с ошибкой",
+                )
+            publishStatus(
+                status = TunnelContract.STATUS_ERROR,
+                mode = TunnelContract.MODE_NATIVE_TLS_SPLIT_PROBE,
+                error = buildFailureMessage(primary, cleanupError),
+                nativeVersion = completedVersion,
+            )
+        }
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     private fun completeNativeUdpProbe(
         generation: Long,
         outcome: Result<UdpProbeResult>,
@@ -678,6 +841,8 @@ class ConnectXTunnelService : VpnService() {
                 "Проверка TCP через TEST-NET TUN"
             TunnelContract.MODE_NATIVE_UDP_PROBE ->
                 "Проверка UDP через TEST-NET TUN"
+            TunnelContract.MODE_NATIVE_TLS_SPLIT_PROBE ->
+                "Lab TLS write-split через TEST-NET TUN"
             TunnelContract.MODE_NATIVE_SELF_TEST ->
                 "Native bridge активен · только TEST-NET"
             else -> "Защищённый SOCKS5 relay готов · тестовый маршрут"
@@ -724,6 +889,7 @@ class ConnectXTunnelService : VpnService() {
         nativeVersion: String? = null,
         tcpProbeResult: TcpProbeResult? = null,
         udpProbeResult: UdpProbeResult? = null,
+        strategyProbeResult: StrategyProbeResult? = null,
     ) {
         val statusIntent = Intent(TunnelContract.ACTION_STATUS).apply {
             setPackage(packageName)
@@ -744,6 +910,15 @@ class ConnectXTunnelService : VpnService() {
                 putExtra(TunnelContract.EXTRA_PROBE_DOWNLOADED_BYTES, result.downloadedBytes)
                 putExtra(TunnelContract.EXTRA_PROBE_RELAY_ASSOCIATIONS, result.relayAssociations)
                 putExtra(TunnelContract.EXTRA_PROBE_DATAGRAMS, result.datagrams)
+            }
+            strategyProbeResult?.let { result ->
+                putExtra(TunnelContract.EXTRA_STRATEGY_ID, result.strategyId)
+                putExtra(TunnelContract.EXTRA_STRATEGY_SEGMENTS, result.segments)
+                putExtra(TunnelContract.EXTRA_STRATEGY_SPLIT_OFFSET, result.splitOffset)
+                putExtra(TunnelContract.EXTRA_PROBE_LATENCY_MILLIS, result.latencyMillis)
+                putExtra(TunnelContract.EXTRA_PROBE_UPLOADED_BYTES, result.uploadedBytes)
+                putExtra(TunnelContract.EXTRA_PROBE_DOWNLOADED_BYTES, result.downloadedBytes)
+                putExtra(TunnelContract.EXTRA_PROBE_RELAY_CONNECTIONS, result.relayConnections)
             }
         }
         sendBroadcast(statusIntent)
@@ -766,6 +941,16 @@ class ConnectXTunnelService : VpnService() {
         val datagrams: Long,
     )
 
+    private data class StrategyProbeResult(
+        val strategyId: String,
+        val segments: Int,
+        val splitOffset: Int,
+        val latencyMillis: Long,
+        val uploadedBytes: Long,
+        val downloadedBytes: Long,
+        val relayConnections: Long,
+    )
+
     private companion object {
         const val NOTIFICATION_CHANNEL_ID = "connectx_tunnel"
         const val NOTIFICATION_ID = 1001
@@ -783,6 +968,8 @@ class ConnectXTunnelService : VpnService() {
         const val TCP_PROBE_TEST_PORT = 18_080
         const val UDP_PROBE_TEST_HOST = "192.0.2.1"
         const val UDP_PROBE_TEST_PORT = 18_081
+        const val TLS_SPLIT_TEST_HOST = "192.0.2.1"
+        const val TLS_SPLIT_TEST_PORT = 18_443
         const val PROBE_PAYLOAD_BYTES = 64
         const val PROBE_MAX_PAYLOAD_BYTES = 4 * 1024
         const val PROBE_TIMEOUT_MILLIS = 5_000
@@ -790,6 +977,7 @@ class ConnectXTunnelService : VpnService() {
         const val UDP_PROBE_ATTEMPTS = 3
         const val UDP_PROBE_ATTEMPT_TIMEOUT_MILLIS = 1_500
         const val UDP_PROBE_RETRY_DELAY_MILLIS = 150L
+        const val TLS_SPLIT_WRITE_GAP_MILLIS = 25L
         const val PROBE_STATS_TIMEOUT_MILLIS = 1_000L
         const val PROBE_STATS_POLL_MILLIS = 10L
         const val NANOS_PER_MILLISECOND = 1_000_000L

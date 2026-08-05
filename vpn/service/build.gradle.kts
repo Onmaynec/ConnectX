@@ -22,6 +22,7 @@ kotlin {
 }
 
 dependencies {
+    implementation(project(":strategy:api"))
     implementation(project(":vpn:api"))
     implementation(project(":vpn:nativebridge"))
     implementation(project(":vpn:relay"))

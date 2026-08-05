@@ -12,8 +12,8 @@ android {
         applicationId = "dev.connectx"
         minSdk = 29
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.2.0-alpha.6"
+        versionCode = 8
+        versionName = "0.3.0-alpha.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -55,6 +55,7 @@ kotlin {
 dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:designsystem"))
+    implementation(project(":strategy:api"))
     implementation(project(":vpn:api"))
     implementation(project(":vpn:nativebridge"))
     implementation(project(":vpn:service"))
