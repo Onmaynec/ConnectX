@@ -1,3 +1,3 @@
-Publish ConnectX v0.3.0-alpha.3 from the exact main commit after Android CI passes build, unit tests, lint, APK payload verification, Strategy Foundation, TLS split, A/B/A evaluation, external TLS evidence, JNI, TCP, UDP and DNS runtime gates.
+Publish ConnectX v0.3.0-alpha.3 only from the exact main commit after the standalone release workflow runs scripts/verify-alpha3-local.sh --clean --device on Android 35 x86_64 and passes every build, strategy, evidence, JNI, TCP, UDP and DNS gate.
 
-Activate the event-driven workflow_run publisher. The completed Android CI run supplies the exact release SHA and artifact run ID directly.
+The release workflow builds, verifies, packages and publishes in one run without polling or cross-workflow artifact handoff.
