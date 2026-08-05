@@ -10,6 +10,38 @@ All notable changes to ConnectX are documented in this file.
 - Physical-device repeated TUN lifecycle verification.
 - First strategy verified on a reproducible restricted network.
 
+## [0.3.0-alpha.3]
+
+### Added
+
+- Manual restricted-network TLS evidence flow for one canonical hostname and pinned public IPv4 address on TCP/443.
+- Strict hostname, IDN and public-address policy that rejects URLs, credentials, paths, IP literals, custom ports, local names and mixed public/private DNS answers.
+- Local bounded `SSLEngine` ClientHello generation with SNI and no network connection during payload construction.
+- Fresh BASELINE, STRATEGY and RECOVERY TCP connections through the TEST-NET-only Android TUN, native gVisor/tun2socks bridge and authenticated local SOCKS5 relay.
+- Exact target rewrite from `192.0.2.1:18445` to one protected pinned destination socket.
+- Five-byte TLS record-prefix classification limited to bounded `HANDSHAKE` and `ALERT` records.
+- External evidence diagnostics for phase latency, record kinds, evaluator decision/reason and session-gate state.
+- Redacted report export that does not expose the entered hostname, resolved IPv4, payload, credentials or raw exception text.
+- Loopback TLS evidence responder and Android instrumentation requiring two sequential A/B/A sessions, six TCP flows and complete native teardown.
+- Native bridge version `connectx-go-bridge/0.3.0-alpha.3`.
+- Application version `0.3.0-alpha.3`, versionCode `10`.
+
+### Fixed
+
+- Alpha.3 now preserves the premium Compose interface introduced in alpha.2 instead of restoring the previous single-screen diagnostics layout.
+- Nullable instrumentation relay ports are narrowed only after validation.
+- Hostname rejection reasons are exposed through a typed exhaustive result accessor.
+- Android regression gates now assert the current application and native bridge versions instead of stale alpha.2 and alpha.6 values.
+
+### Safety boundaries
+
+- TUN capture remains limited to TEST-NET-1 (`192.0.2.0/24`); no default IPv4 or IPv6 route is installed.
+- Ordinary application traffic is not routed or modified.
+- Production evidence accepts one canonical hostname, one pinned public IPv4 and TCP/443 only.
+- No HTTP request, response body, credentials, cookies, tokens, certificate-chain inspection, MITM or user CA is used.
+- Two socket writes are not claimed to equal two TCP packets or wire segments.
+- A result from one target and one network is not presented as universal evidence of censorship bypass.
+
 ## [0.3.0-alpha.2]
 
 ### Added
