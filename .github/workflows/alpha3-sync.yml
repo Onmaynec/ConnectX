@@ -1,0 +1,46 @@
+name: Inspect alpha.3 sync conflicts
+
+on:
+  push:
+    branches:
+      - ops/alpha3-sync-trigger
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Inspect main into alpha.3 merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main feature/v0.3.0-alpha3
+          git checkout -B alpha3-work origin/feature/v0.3.0-alpha3
+
+          set +e
+          git merge --no-commit --no-ff origin/main
+          merge_status=$?
+          set -e
+
+          echo "merge_status=$merge_status"
+          echo "--- unmerged paths ---"
+          git diff --name-only --diff-filter=U || true
+          echo "--- status ---"
+          git status --short
+          echo "--- combined conflict diff ---"
+          git diff --cc || true
+
+          if [[ $merge_status -ne 0 ]]; then
+            exit $merge_status
+          fi
+
+          echo "Merge is conflict-free."
