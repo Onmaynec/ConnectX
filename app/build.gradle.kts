@@ -12,8 +12,8 @@ android {
         applicationId = "dev.connectx"
         minSdk = 29
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.3.0-alpha.2"
+        versionCode = 10
+        versionName = "0.3.0-alpha.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -69,6 +69,7 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui.tooling.preview)
 
+    testImplementation(libs.junit)
     androidTestImplementation(project(":vpn:relay"))
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)

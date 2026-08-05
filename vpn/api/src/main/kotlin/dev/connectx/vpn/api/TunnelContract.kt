@@ -43,6 +43,22 @@ object TunnelContract {
     const val EXTRA_STRATEGY_GATE_STATE = "dev.connectx.extra.STRATEGY_GATE_STATE"
     const val EXTRA_STRATEGY_COOLDOWN_UNTIL_MILLIS =
         "dev.connectx.extra.STRATEGY_COOLDOWN_UNTIL_MILLIS"
+    const val EXTRA_EVIDENCE_HOSTNAME = "dev.connectx.extra.EVIDENCE_HOSTNAME"
+    const val EXTRA_EVIDENCE_RESOLVED_IPV4 = "dev.connectx.extra.EVIDENCE_RESOLVED_IPV4"
+    const val EXTRA_EVIDENCE_TARGET_PORT = "dev.connectx.extra.EVIDENCE_TARGET_PORT"
+    const val EXTRA_EVIDENCE_BASELINE_RECORD_KIND =
+        "dev.connectx.extra.EVIDENCE_BASELINE_RECORD_KIND"
+    const val EXTRA_EVIDENCE_STRATEGY_RECORD_KIND =
+        "dev.connectx.extra.EVIDENCE_STRATEGY_RECORD_KIND"
+    const val EXTRA_EVIDENCE_RECOVERY_RECORD_KIND =
+        "dev.connectx.extra.EVIDENCE_RECOVERY_RECORD_KIND"
+
+    // Honored only when the installed application is debuggable. Release builds
+    // reject these values before opening any relay or TUN resource.
+    const val EXTRA_EVIDENCE_TEST_RESOLVED_IPV4 =
+        "dev.connectx.extra.EVIDENCE_TEST_RESOLVED_IPV4"
+    const val EXTRA_EVIDENCE_TEST_LOOPBACK_PORT =
+        "dev.connectx.extra.EVIDENCE_TEST_LOOPBACK_PORT"
 
     const val MODE_FOUNDATION = "foundation"
     const val MODE_NATIVE_SELF_TEST = "native_self_test"
@@ -51,6 +67,7 @@ object TunnelContract {
     const val MODE_NATIVE_DNS_PROBE = "native_dns_probe"
     const val MODE_NATIVE_TLS_SPLIT_PROBE = "native_tls_split_probe"
     const val MODE_NATIVE_STRATEGY_EVALUATION = "native_strategy_evaluation"
+    const val MODE_NATIVE_EXTERNAL_TLS_EVIDENCE = "native_external_tls_evidence"
 
     const val STATUS_STARTED = "started"
     const val STATUS_STOPPED = "stopped"
@@ -59,5 +76,6 @@ object TunnelContract {
     const val STATUS_DNS_PROBE_SUCCEEDED = "dns_probe_succeeded"
     const val STATUS_STRATEGY_PROBE_SUCCEEDED = "strategy_probe_succeeded"
     const val STATUS_STRATEGY_EVALUATION_COMPLETED = "strategy_evaluation_completed"
+    const val STATUS_EXTERNAL_TLS_EVIDENCE_COMPLETED = "external_tls_evidence_completed"
     const val STATUS_ERROR = "error"
 }

@@ -12,8 +12,17 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import dev.connectx.app.evidence.ExternalTlsEvidencePanel
+import dev.connectx.app.evidence.ExternalTlsEvidenceStatus
+import dev.connectx.app.evidence.ExternalTlsEvidenceUiState
 import dev.connectx.app.home.HomeScreen
 import dev.connectx.core.designsystem.ConnectXTheme
 import dev.connectx.core.model.ConnectionEvent
@@ -21,31 +30,65 @@ import dev.connectx.core.model.ConnectionState
 import dev.connectx.core.model.ConnectionStateReducer
 import dev.connectx.core.model.ConnectionUiState
 import dev.connectx.core.model.EngineMode
+import dev.connectx.strategy.api.ExternalTlsEvidenceTarget
+import dev.connectx.strategy.api.HostnameValidationResult
 import dev.connectx.vpn.api.TunnelContract
 import dev.connectx.vpn.nativebridge.NativeTunBridge
 import dev.connectx.vpn.service.ConnectXDnsProbeService
+import dev.connectx.vpn.service.ConnectXExternalTlsEvidenceService
 import dev.connectx.vpn.service.ConnectXStrategyEvaluationService
 import dev.connectx.vpn.service.ConnectXTunnelService
 
 class MainActivity : ComponentActivity() {
     private val connectionState = mutableStateOf(ConnectionUiState())
+    private val externalEvidenceState = mutableStateOf(ExternalTlsEvidenceUiState())
+
     private var pendingMode: EngineMode = EngineMode.FOUNDATION
+    private var pendingVpnRequest: PendingVpnRequest = PendingVpnRequest.NONE
+    private var pendingEvidenceHostname: String? = null
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            dispatch(ConnectionEvent.PermissionGranted)
-            startTunnelService(pendingMode)
-        } else {
-            dispatch(ConnectionEvent.PermissionDenied)
-            pendingMode = EngineMode.FOUNDATION
+        when (pendingVpnRequest) {
+            PendingVpnRequest.EXTERNAL_TLS_EVIDENCE -> {
+                if (result.resultCode == Activity.RESULT_OK) {
+                    startExternalTlsEvidenceService()
+                } else {
+                    externalEvidenceState.value = externalEvidenceState.value.copy(
+                        status = ExternalTlsEvidenceStatus.ERROR,
+                        error = "Системное VPN-разрешение не предоставлено",
+                    )
+                    pendingEvidenceHostname = null
+                }
+            }
+
+            PendingVpnRequest.TUNNEL -> {
+                if (result.resultCode == Activity.RESULT_OK) {
+                    dispatch(ConnectionEvent.PermissionGranted)
+                    startTunnelService(pendingMode)
+                } else {
+                    dispatch(ConnectionEvent.PermissionDenied)
+                    pendingMode = EngineMode.FOUNDATION
+                }
+            }
+
+            PendingVpnRequest.NONE -> Unit
         }
+        pendingVpnRequest = PendingVpnRequest.NONE
     }
 
     private val tunnelStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val statusIntent = intent ?: return
+            if (
+                statusIntent.getStringExtra(TunnelContract.EXTRA_ENGINE_MODE) ==
+                TunnelContract.MODE_NATIVE_EXTERNAL_TLS_EVIDENCE
+            ) {
+                handleExternalEvidenceStatus(statusIntent)
+                return
+            }
+
             val mode = statusIntent.readEngineMode()
             when (statusIntent.getStringExtra(TunnelContract.EXTRA_STATUS)) {
                 TunnelContract.STATUS_STARTED -> dispatch(
@@ -199,74 +242,7 @@ class MainActivity : ComponentActivity() {
                 )
 
                 TunnelContract.STATUS_STRATEGY_EVALUATION_COMPLETED -> dispatch(
-                    ConnectionEvent.StrategyEvaluationCompleted(
-                        strategyId = statusIntent.getStringExtra(
-                            TunnelContract.EXTRA_STRATEGY_ID,
-                        ).orEmpty(),
-                        segments = statusIntent.getIntExtra(
-                            TunnelContract.EXTRA_STRATEGY_SEGMENTS,
-                            0,
-                        ),
-                        splitOffset = statusIntent.getIntExtra(
-                            TunnelContract.EXTRA_STRATEGY_SPLIT_OFFSET,
-                            0,
-                        ),
-                        decision = statusIntent.getStringExtra(
-                            TunnelContract.EXTRA_STRATEGY_DECISION,
-                        ).orEmpty(),
-                        reason = statusIntent.getStringExtra(
-                            TunnelContract.EXTRA_STRATEGY_REASON,
-                        ).orEmpty(),
-                        baselineLatencyMillis = statusIntent.optionalNonNegativeLong(
-                            TunnelContract.EXTRA_STRATEGY_BASELINE_LATENCY_MILLIS,
-                        ),
-                        strategyLatencyMillis = statusIntent.optionalNonNegativeLong(
-                            TunnelContract.EXTRA_STRATEGY_LATENCY_MILLIS,
-                        ),
-                        recoveryLatencyMillis = statusIntent.optionalNonNegativeLong(
-                            TunnelContract.EXTRA_STRATEGY_RECOVERY_LATENCY_MILLIS,
-                        ),
-                        latencyDeltaMillis = statusIntent.optionalLong(
-                            TunnelContract.EXTRA_STRATEGY_LATENCY_DELTA_MILLIS,
-                            missingValue = Long.MIN_VALUE,
-                        ),
-                        allowedStrategyLatencyMillis = statusIntent.optionalNonNegativeLong(
-                            TunnelContract.EXTRA_STRATEGY_ALLOWED_LATENCY_MILLIS,
-                        ),
-                        baselineFailure = statusIntent.getStringExtra(
-                            TunnelContract.EXTRA_STRATEGY_BASELINE_FAILURE,
-                        ),
-                        strategyFailure = statusIntent.getStringExtra(
-                            TunnelContract.EXTRA_STRATEGY_PHASE_FAILURE,
-                        ),
-                        recoveryFailure = statusIntent.getStringExtra(
-                            TunnelContract.EXTRA_STRATEGY_RECOVERY_FAILURE,
-                        ),
-                        uploadedBytes = statusIntent.getLongExtra(
-                            TunnelContract.EXTRA_PROBE_UPLOADED_BYTES,
-                            0L,
-                        ),
-                        downloadedBytes = statusIntent.getLongExtra(
-                            TunnelContract.EXTRA_PROBE_DOWNLOADED_BYTES,
-                            0L,
-                        ),
-                        relayConnections = statusIntent.getLongExtra(
-                            TunnelContract.EXTRA_PROBE_RELAY_CONNECTIONS,
-                            0L,
-                        ),
-                        gateState = statusIntent.getStringExtra(
-                            TunnelContract.EXTRA_STRATEGY_GATE_STATE,
-                        ).orEmpty(),
-                        cooldownUntilElapsedMillis = statusIntent.optionalNonNegativeLong(
-                            TunnelContract.EXTRA_STRATEGY_COOLDOWN_UNTIL_MILLIS,
-                        ),
-                        nativeVersion = statusIntent.getStringExtra(
-                            TunnelContract.EXTRA_NATIVE_VERSION,
-                        ),
-                        abi = statusIntent.getStringExtra(
-                            TunnelContract.EXTRA_NATIVE_ABI,
-                        ),
-                    ),
+                    statusIntent.toStrategyEvaluationEvent(),
                 )
 
                 TunnelContract.STATUS_STOPPED -> dispatch(ConnectionEvent.TunnelStopped)
@@ -288,28 +264,45 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             ConnectXTheme {
-                HomeScreen(
-                    uiState = connectionState.value,
-                    onToggle = ::toggleTunnel,
-                    onNativeSelfTest = {
-                        requestTunnelPermission(EngineMode.NATIVE_SELF_TEST)
-                    },
-                    onNativeTcpProbe = {
-                        requestTunnelPermission(EngineMode.NATIVE_TCP_PROBE)
-                    },
-                    onNativeUdpProbe = {
-                        requestTunnelPermission(EngineMode.NATIVE_UDP_PROBE)
-                    },
-                    onNativeDnsProbe = {
-                        requestTunnelPermission(EngineMode.NATIVE_DNS_PROBE)
-                    },
-                    onNativeTlsSplitProbe = {
-                        requestTunnelPermission(EngineMode.NATIVE_TLS_SPLIT_PROBE)
-                    },
-                    onStrategyEvaluation = {
-                        requestTunnelPermission(EngineMode.NATIVE_STRATEGY_EVALUATION)
-                    },
-                )
+                val evidence = externalEvidenceState.value
+                val baseUiState = connectionState.value
+                Box(modifier = Modifier.fillMaxSize()) {
+                    HomeScreen(
+                        uiState = baseUiState.forExternalEvidence(evidence.status),
+                        onToggle = ::toggleTunnel,
+                        onNativeSelfTest = {
+                            requestTunnelPermission(EngineMode.NATIVE_SELF_TEST)
+                        },
+                        onNativeTcpProbe = {
+                            requestTunnelPermission(EngineMode.NATIVE_TCP_PROBE)
+                        },
+                        onNativeUdpProbe = {
+                            requestTunnelPermission(EngineMode.NATIVE_UDP_PROBE)
+                        },
+                        onNativeDnsProbe = {
+                            requestTunnelPermission(EngineMode.NATIVE_DNS_PROBE)
+                        },
+                        onNativeTlsSplitProbe = {
+                            requestTunnelPermission(EngineMode.NATIVE_TLS_SPLIT_PROBE)
+                        },
+                        onStrategyEvaluation = {
+                            requestTunnelPermission(EngineMode.NATIVE_STRATEGY_EVALUATION)
+                        },
+                    )
+                    ExternalTlsEvidencePanel(
+                        state = evidence,
+                        globalBusy = baseUiState.state !in setOf(
+                            ConnectionState.OFF,
+                            ConnectionState.ERROR,
+                        ),
+                        onHostnameChanged = ::updateEvidenceHostname,
+                        onStart = ::requestExternalTlsEvidence,
+                        onStop = ::stopExternalTlsEvidenceService,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 54.dp, end = 16.dp),
+                    )
+                }
             }
         }
     }
@@ -320,6 +313,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun toggleTunnel() {
+        if (externalEvidenceState.value.isBusy) {
+            stopExternalTlsEvidenceService()
+            return
+        }
+
         when (connectionState.value.state) {
             ConnectionState.LOCAL_TUN_ACTIVE -> stopTunnelService()
             ConnectionState.STARTING,
@@ -334,16 +332,63 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestTunnelPermission(mode: EngineMode) {
+        if (externalEvidenceState.value.isBusy) return
+
+        pendingVpnRequest = PendingVpnRequest.TUNNEL
         pendingMode = mode
         dispatch(ConnectionEvent.StartRequested(mode))
         val permissionIntent = VpnService.prepare(this)
         if (permissionIntent == null) {
+            pendingVpnRequest = PendingVpnRequest.NONE
             dispatch(ConnectionEvent.PermissionGranted)
             startTunnelService(mode)
         } else {
             dispatch(ConnectionEvent.PermissionRequired)
             vpnPermissionLauncher.launch(permissionIntent)
         }
+    }
+
+    private fun requestExternalTlsEvidence() {
+        if (
+            connectionState.value.state !in setOf(ConnectionState.OFF, ConnectionState.ERROR) ||
+            externalEvidenceState.value.isBusy
+        ) {
+            return
+        }
+
+        val validation = ExternalTlsEvidenceTarget.validateHostname(
+            externalEvidenceState.value.hostnameInput,
+        )
+        if (validation !is HostnameValidationResult.Valid) {
+            externalEvidenceState.value = externalEvidenceState.value.copy(
+                status = ExternalTlsEvidenceStatus.ERROR,
+                error = "Hostname отклонён: ${validation.reason.name}",
+            )
+            return
+        }
+
+        pendingEvidenceHostname = validation.normalizedHostname
+        pendingVpnRequest = PendingVpnRequest.EXTERNAL_TLS_EVIDENCE
+        externalEvidenceState.value = ExternalTlsEvidenceUiState(
+            hostnameInput = externalEvidenceState.value.hostnameInput,
+            status = ExternalTlsEvidenceStatus.REQUESTING_PERMISSION,
+            normalizedHostname = validation.normalizedHostname,
+        )
+
+        val permissionIntent = VpnService.prepare(this)
+        if (permissionIntent == null) {
+            pendingVpnRequest = PendingVpnRequest.NONE
+            startExternalTlsEvidenceService()
+        } else {
+            vpnPermissionLauncher.launch(permissionIntent)
+        }
+    }
+
+    private fun updateEvidenceHostname(hostname: String) {
+        if (externalEvidenceState.value.isBusy) return
+        externalEvidenceState.value = ExternalTlsEvidenceUiState(
+            hostnameInput = hostname.take(MAX_HOSTNAME_INPUT_CHARS),
+        )
     }
 
     private fun startTunnelService(mode: EngineMode) {
@@ -363,13 +408,150 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun startExternalTlsEvidenceService() {
+        val hostname = pendingEvidenceHostname
+        if (hostname.isNullOrBlank()) {
+            externalEvidenceState.value = externalEvidenceState.value.copy(
+                status = ExternalTlsEvidenceStatus.ERROR,
+                error = "Canonical hostname отсутствует",
+            )
+            return
+        }
+
+        externalEvidenceState.value = externalEvidenceState.value.copy(
+            status = ExternalTlsEvidenceStatus.STARTING,
+            normalizedHostname = hostname,
+            error = null,
+        )
+        runCatching {
+            val serviceIntent = Intent(
+                this,
+                ConnectXExternalTlsEvidenceService::class.java,
+            ).apply {
+                action = TunnelContract.ACTION_START
+                putExtra(TunnelContract.EXTRA_EVIDENCE_HOSTNAME, hostname)
+            }
+            ContextCompat.startForegroundService(this, serviceIntent)
+        }.onFailure { error ->
+            externalEvidenceState.value = externalEvidenceState.value.copy(
+                status = ExternalTlsEvidenceStatus.ERROR,
+                error = error.message ?: "Не удалось запустить TLS evidence service",
+            )
+        }
+        pendingEvidenceHostname = null
+    }
+
     private fun stopTunnelService() {
+        if (externalEvidenceState.value.isBusy) {
+            stopExternalTlsEvidenceService()
+            return
+        }
+
         val activeMode = connectionState.value.mode
         dispatch(ConnectionEvent.StopRequested)
         val serviceIntent = Intent(this, activeMode.serviceClass()).apply {
             action = TunnelContract.ACTION_STOP
         }
         startService(serviceIntent)
+    }
+
+    private fun stopExternalTlsEvidenceService() {
+        if (!externalEvidenceState.value.isBusy) return
+        externalEvidenceState.value = externalEvidenceState.value.copy(
+            status = ExternalTlsEvidenceStatus.STOPPING,
+        )
+        val serviceIntent = Intent(
+            this,
+            ConnectXExternalTlsEvidenceService::class.java,
+        ).apply {
+            action = TunnelContract.ACTION_STOP
+        }
+        runCatching { startService(serviceIntent) }
+            .onFailure { error ->
+                externalEvidenceState.value = externalEvidenceState.value.copy(
+                    status = ExternalTlsEvidenceStatus.ERROR,
+                    error = error.message ?: "Не удалось остановить TLS evidence service",
+                )
+            }
+    }
+
+    private fun handleExternalEvidenceStatus(intent: Intent) {
+        when (intent.getStringExtra(TunnelContract.EXTRA_STATUS)) {
+            TunnelContract.STATUS_STARTED -> {
+                externalEvidenceState.value = externalEvidenceState.value.copy(
+                    status = ExternalTlsEvidenceStatus.RUNNING,
+                    normalizedHostname = intent.getStringExtra(
+                        TunnelContract.EXTRA_EVIDENCE_HOSTNAME,
+                    ) ?: externalEvidenceState.value.normalizedHostname,
+                    resolvedIpv4 = intent.getStringExtra(
+                        TunnelContract.EXTRA_EVIDENCE_RESOLVED_IPV4,
+                    ),
+                    targetPort = intent.getIntExtra(
+                        TunnelContract.EXTRA_EVIDENCE_TARGET_PORT,
+                        443,
+                    ),
+                    error = null,
+                )
+            }
+
+            TunnelContract.STATUS_EXTERNAL_TLS_EVIDENCE_COMPLETED -> {
+                externalEvidenceState.value = externalEvidenceState.value.copy(
+                    status = ExternalTlsEvidenceStatus.COMPLETED,
+                    normalizedHostname = intent.getStringExtra(
+                        TunnelContract.EXTRA_EVIDENCE_HOSTNAME,
+                    ) ?: externalEvidenceState.value.normalizedHostname,
+                    resolvedIpv4 = intent.getStringExtra(
+                        TunnelContract.EXTRA_EVIDENCE_RESOLVED_IPV4,
+                    ),
+                    targetPort = intent.getIntExtra(
+                        TunnelContract.EXTRA_EVIDENCE_TARGET_PORT,
+                        443,
+                    ),
+                    baselineLatencyMillis = intent.optionalNonNegativeLong(
+                        TunnelContract.EXTRA_STRATEGY_BASELINE_LATENCY_MILLIS,
+                    ),
+                    strategyLatencyMillis = intent.optionalNonNegativeLong(
+                        TunnelContract.EXTRA_STRATEGY_LATENCY_MILLIS,
+                    ),
+                    recoveryLatencyMillis = intent.optionalNonNegativeLong(
+                        TunnelContract.EXTRA_STRATEGY_RECOVERY_LATENCY_MILLIS,
+                    ),
+                    baselineRecordKind = intent.getStringExtra(
+                        TunnelContract.EXTRA_EVIDENCE_BASELINE_RECORD_KIND,
+                    ),
+                    strategyRecordKind = intent.getStringExtra(
+                        TunnelContract.EXTRA_EVIDENCE_STRATEGY_RECORD_KIND,
+                    ),
+                    recoveryRecordKind = intent.getStringExtra(
+                        TunnelContract.EXTRA_EVIDENCE_RECOVERY_RECORD_KIND,
+                    ),
+                    decision = intent.getStringExtra(
+                        TunnelContract.EXTRA_STRATEGY_DECISION,
+                    ),
+                    reason = intent.getStringExtra(
+                        TunnelContract.EXTRA_STRATEGY_REASON,
+                    ),
+                    gateState = intent.getStringExtra(
+                        TunnelContract.EXTRA_STRATEGY_GATE_STATE,
+                    ),
+                    error = null,
+                )
+            }
+
+            TunnelContract.STATUS_STOPPED -> {
+                externalEvidenceState.value = ExternalTlsEvidenceUiState(
+                    hostnameInput = externalEvidenceState.value.hostnameInput,
+                )
+            }
+
+            TunnelContract.STATUS_ERROR -> {
+                externalEvidenceState.value = externalEvidenceState.value.copy(
+                    status = ExternalTlsEvidenceStatus.ERROR,
+                    error = intent.getStringExtra(TunnelContract.EXTRA_ERROR)
+                        ?: "Неизвестная ошибка внешней TLS-проверки",
+                )
+            }
+        }
     }
 
     private fun EngineMode.serviceClass(): Class<*> = when (this) {
@@ -429,7 +611,80 @@ class MainActivity : ComponentActivity() {
             event = event,
         )
     }
+
+    private enum class PendingVpnRequest {
+        NONE,
+        TUNNEL,
+        EXTERNAL_TLS_EVIDENCE,
+    }
+
+    private companion object {
+        const val MAX_HOSTNAME_INPUT_CHARS = 253
+    }
 }
+
+private fun ConnectionUiState.forExternalEvidence(
+    status: ExternalTlsEvidenceStatus,
+): ConnectionUiState = when (status) {
+    ExternalTlsEvidenceStatus.REQUESTING_PERMISSION,
+    ExternalTlsEvidenceStatus.STARTING,
+    -> copy(
+        state = ConnectionState.STARTING,
+        mode = EngineMode.NATIVE_STRATEGY_EVALUATION,
+    )
+
+    ExternalTlsEvidenceStatus.RUNNING -> copy(
+        state = ConnectionState.LOCAL_TUN_ACTIVE,
+        mode = EngineMode.NATIVE_STRATEGY_EVALUATION,
+    )
+
+    ExternalTlsEvidenceStatus.STOPPING -> copy(
+        state = ConnectionState.STOPPING,
+        mode = EngineMode.NATIVE_STRATEGY_EVALUATION,
+    )
+
+    ExternalTlsEvidenceStatus.IDLE,
+    ExternalTlsEvidenceStatus.COMPLETED,
+    ExternalTlsEvidenceStatus.ERROR,
+    -> this
+}
+
+private fun Intent.toStrategyEvaluationEvent(): ConnectionEvent.StrategyEvaluationCompleted =
+    ConnectionEvent.StrategyEvaluationCompleted(
+        strategyId = getStringExtra(TunnelContract.EXTRA_STRATEGY_ID).orEmpty(),
+        segments = getIntExtra(TunnelContract.EXTRA_STRATEGY_SEGMENTS, 0),
+        splitOffset = getIntExtra(TunnelContract.EXTRA_STRATEGY_SPLIT_OFFSET, 0),
+        decision = getStringExtra(TunnelContract.EXTRA_STRATEGY_DECISION).orEmpty(),
+        reason = getStringExtra(TunnelContract.EXTRA_STRATEGY_REASON).orEmpty(),
+        baselineLatencyMillis = optionalNonNegativeLong(
+            TunnelContract.EXTRA_STRATEGY_BASELINE_LATENCY_MILLIS,
+        ),
+        strategyLatencyMillis = optionalNonNegativeLong(
+            TunnelContract.EXTRA_STRATEGY_LATENCY_MILLIS,
+        ),
+        recoveryLatencyMillis = optionalNonNegativeLong(
+            TunnelContract.EXTRA_STRATEGY_RECOVERY_LATENCY_MILLIS,
+        ),
+        latencyDeltaMillis = optionalLong(
+            TunnelContract.EXTRA_STRATEGY_LATENCY_DELTA_MILLIS,
+            missingValue = Long.MIN_VALUE,
+        ),
+        allowedStrategyLatencyMillis = optionalNonNegativeLong(
+            TunnelContract.EXTRA_STRATEGY_ALLOWED_LATENCY_MILLIS,
+        ),
+        baselineFailure = getStringExtra(TunnelContract.EXTRA_STRATEGY_BASELINE_FAILURE),
+        strategyFailure = getStringExtra(TunnelContract.EXTRA_STRATEGY_PHASE_FAILURE),
+        recoveryFailure = getStringExtra(TunnelContract.EXTRA_STRATEGY_RECOVERY_FAILURE),
+        uploadedBytes = getLongExtra(TunnelContract.EXTRA_PROBE_UPLOADED_BYTES, 0L),
+        downloadedBytes = getLongExtra(TunnelContract.EXTRA_PROBE_DOWNLOADED_BYTES, 0L),
+        relayConnections = getLongExtra(TunnelContract.EXTRA_PROBE_RELAY_CONNECTIONS, 0L),
+        gateState = getStringExtra(TunnelContract.EXTRA_STRATEGY_GATE_STATE).orEmpty(),
+        cooldownUntilElapsedMillis = optionalNonNegativeLong(
+            TunnelContract.EXTRA_STRATEGY_COOLDOWN_UNTIL_MILLIS,
+        ),
+        nativeVersion = getStringExtra(TunnelContract.EXTRA_NATIVE_VERSION),
+        abi = getStringExtra(TunnelContract.EXTRA_NATIVE_ABI),
+    )
 
 private fun EngineMode.toContractValue(): String = when (this) {
     EngineMode.FOUNDATION -> TunnelContract.MODE_FOUNDATION
