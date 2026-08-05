@@ -1,14 +1,14 @@
 name: Publish v0.3.0-alpha.3
 
 on:
-  workflow_run:
-    workflows:
-      - Android CI
-    types:
-      - completed
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/release-v0.3.0-alpha3.yml
+      - docs/releases/v0.3.0-alpha.3.publish
 
 permissions:
-  actions: read
   contents: write
 
 concurrency:
@@ -16,87 +16,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  select-release:
-    name: Select exact alpha.3 activation
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' }}
+  verify-and-publish:
+    name: Verify exact commit and publish prerelease
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      activated: ${{ steps.select.outputs.activated }}
-      target_sha: ${{ steps.select.outputs.target_sha }}
-      run_id: ${{ steps.select.outputs.run_id }}
+    timeout-minutes: 110
     env:
-      TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
-      RUN_ID: ${{ github.event.workflow_run.id }}
-      MARKER_PATH: docs/releases/v0.3.0-alpha.3.publish
-
-    steps:
-      - name: Checkout exact successful commit
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 2
-
-      - name: Select trusted marker activation
-        id: select
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
-          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-
-          actual_sha="$(git rev-parse HEAD)"
-          if [[ "$actual_sha" != "$TARGET_SHA" ]]; then
-            echo "Checked out $actual_sha, expected $TARGET_SHA."
-            exit 1
-          fi
-
-          run_json="$(gh run view "$RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json name,status,conclusion,event,headSha)"
-          test "$(jq -r '.name' <<<"$run_json")" = "Android CI"
-          test "$(jq -r '.status' <<<"$run_json")" = "completed"
-          test "$(jq -r '.conclusion' <<<"$run_json")" = "success"
-          test "$(jq -r '.event' <<<"$run_json")" = "push"
-          test "$(jq -r '.headSha' <<<"$run_json")" = "$TARGET_SHA"
-
-          parent_sha="$(git rev-parse "$TARGET_SHA^1")"
-          git diff --name-only "$parent_sha" "$TARGET_SHA" | tee release-changed-files.txt
-          if ! grep -Fxq "$MARKER_PATH" release-changed-files.txt; then
-            echo "activated=false" >> "$GITHUB_OUTPUT"
-            echo "This successful main CI run did not change the alpha.3 publish marker; skipping."
-            exit 0
-          fi
-
-          test -s "$MARKER_PATH"
-          grep -Fq 'Publish ConnectX v0.3.0-alpha.3' "$MARKER_PATH"
-          echo "activated=true" >> "$GITHUB_OUTPUT"
-
-  prepare-and-publish:
-    name: Publish exact successful Android CI output
-    needs: select-release
-    if: ${{ needs.select-release.outputs.activated == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      TARGET_SHA: ${{ needs.select-release.outputs.target_sha }}
-      RUN_ID: ${{ needs.select-release.outputs.run_id }}
+      TARGET_SHA: ${{ github.sha }}
       TAG_NAME: v0.3.0-alpha.3
       MARKER_PATH: docs/releases/v0.3.0-alpha.3.publish
+      ANDROID_AVD_HOME: ${{ runner.temp }}/connectx-alpha3-avd
+      ANDROID_USER_HOME: ${{ runner.temp }}/connectx-alpha3-android-user
+      CONNECTX_VERIFY_OUT: ${{ github.workspace }}/build/release-verification-alpha3
+      GRADLE_BIN: gradle
+      ADB_SERIAL: emulator-5554
 
     steps:
       - name: Checkout exact release commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.select-release.outputs.target_sha }}
+          ref: ${{ github.sha }}
+          fetch-depth: 2
 
-      - name: Verify release metadata and safety docs
+      - name: Verify release activation and metadata
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+
+          parent_sha="$(git rev-parse "$TARGET_SHA^1")"
+          git diff --name-only "$parent_sha" "$TARGET_SHA" | tee release-changed-files.txt
+          grep -Fxq "$MARKER_PATH" release-changed-files.txt
+          grep -Fq '.github/workflows/release-v0.3.0-alpha3.yml' release-changed-files.txt
+
           grep -Fq 'Publish ConnectX v0.3.0-alpha.3' "$MARKER_PATH"
           grep -Fq 'versionCode = 10' app/build.gradle.kts
           grep -Fq 'versionName = "0.3.0-alpha.3"' app/build.gradle.kts
@@ -112,61 +63,155 @@ jobs:
           test -s THIRD_PARTY_NOTICES.md
           test -s licenses/tun2socks-MIT.txt
           test -s licenses/gvisor-LICENSE.txt
-          test ! -e .github/workflows/cancel-stale-alpha3-publishers.yml
-          test ! -e docs/releases/v0.3.0-alpha.3.cancel-stale
 
-      - name: Download exact Android CI artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Go 1.26.3
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.3"
+          cache-dependency-path: |
+            engine/go/go.mod
+            engine/go/go.sum
+
+      - name: Install locked Android toolchain and emulator image
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in 1 2 3 4 5; do
-            rm -rf downloaded
-            mkdir -p downloaded/apk downloaded/native
-            if gh run download "$RUN_ID" \
-              --repo "$GITHUB_REPOSITORY" \
-              --name "connectx-debug-$TARGET_SHA" \
-              --dir downloaded/apk && \
-              gh run download "$RUN_ID" \
-              --repo "$GITHUB_REPOSITORY" \
-              --name "connectx-native-$TARGET_SHA" \
-              --dir downloaded/native; then
-              break
-            fi
+          mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_USER_HOME"
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;28.0.13004108" \
+            "platform-tools" \
+            "emulator" \
+            "platforms;android-35" \
+            "system-images;android-35;google_apis;x86_64"
+          test -x "$ANDROID_SDK_ROOT/platform-tools/adb"
+          test -x "$ANDROID_SDK_ROOT/emulator/emulator"
+          test -d "$ANDROID_SDK_ROOT/ndk/28.0.13004108"
+          "$ANDROID_SDK_ROOT/emulator/emulator" -accel-check | tee accel-check.txt
+          df -h / | tee disk-before-verification.txt
 
-            if (( attempt == 5 )); then
-              echo "Exact Android CI artifacts were unavailable after $attempt attempts."
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+
+      - name: Create Android 35 x86_64 AVD
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo no | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" \
+            create avd \
+            --force \
+            --name connectx-alpha3-release \
+            --path "$ANDROID_AVD_HOME/connectx-alpha3-release.avd" \
+            --package "system-images;android-35;google_apis;x86_64"
+          "$ANDROID_SDK_ROOT/emulator/emulator" -list-avds | tee avd-list.txt
+          grep -qx 'connectx-alpha3-release' avd-list.txt
+
+      - name: Start emulator and wait for Android
+        shell: bash
+        run: |
+          set -euo pipefail
+          ADB="$ANDROID_SDK_ROOT/platform-tools/adb"
+          EMULATOR="$ANDROID_SDK_ROOT/emulator/emulator"
+          test -e /dev/kvm
+          sudo chmod 666 /dev/kvm
+
+          nohup "$EMULATOR" \
+            -avd connectx-alpha3-release \
+            -accel on \
+            -memory 2048 \
+            -no-window \
+            -noaudio \
+            -no-boot-anim \
+            -no-snapshot \
+            -no-snapshot-save \
+            -no-metrics \
+            -gpu swiftshader_indirect \
+            > emulator.log 2>&1 &
+          echo "$!" > emulator.pid
+
+          sleep 5
+          kill -0 "$(cat emulator.pid)"
+          "$ADB" start-server
+          timeout 300 "$ADB" -s "$ADB_SERIAL" wait-for-device
+
+          deadline=$((SECONDS + 300))
+          until [[ "$("$ADB" -s "$ADB_SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; do
+            if ! kill -0 "$(cat emulator.pid)" 2>/dev/null; then
+              cat emulator.log
               exit 1
             fi
-            sleep $((attempt * 10))
+            if ((SECONDS >= deadline)); then
+              cat emulator.log
+              exit 1
+            fi
+            sleep 5
           done
 
-          test -s downloaded/apk/app-debug.apk
-          test -s downloaded/native/jniLibs/arm64-v8a/libconnectxbridge.so
-          test -s downloaded/native/jniLibs/x86_64/libconnectxbridge.so
+          test "$("$ADB" -s "$ADB_SERIAL" shell getprop ro.build.version.sdk | tr -d '\r')" = "35"
+          test "$("$ADB" -s "$ADB_SERIAL" shell getprop ro.product.cpu.abi | tr -d '\r')" = "x86_64"
 
-      - name: Verify APK payload
+      - name: Run canonical alpha.3 build and Android gates
         shell: bash
         run: |
           set -euo pipefail
-          unzip -l downloaded/apk/app-debug.apk | tee apk-contents.txt
-          grep -Fq 'lib/arm64-v8a/libconnectxbridge.so' apk-contents.txt
-          grep -Fq 'lib/x86_64/libconnectxbridge.so' apk-contents.txt
-          grep -Fq 'assets/THIRD_PARTY_NOTICES.md' apk-contents.txt
-          grep -Fq 'assets/tun2socks-MIT.txt' apk-contents.txt
-          grep -Fq 'assets/gvisor-LICENSE.txt' apk-contents.txt
+          chmod +x scripts/verify-alpha3-local.sh
+          scripts/verify-alpha3-local.sh --clean --device
+          grep -Fq "Commit: $TARGET_SHA" "$CONNECTX_VERIFY_OUT/RESULT.txt"
+          grep -Fq 'Static build gates: passed' "$CONNECTX_VERIFY_OUT/RESULT.txt"
+          grep -Fq 'Android runtime gates: passed' "$CONNECTX_VERIFY_OUT/RESULT.txt"
+          test "$(cat "$CONNECTX_VERIFY_OUT/COMMIT_SHA.txt")" = "$TARGET_SHA"
 
-      - name: Prepare deterministic release assets and checksums
+      - name: Collect release verification diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          mkdir -p release-diagnostics
+          cp emulator.log release-diagnostics/ 2>/dev/null
+          cp accel-check.txt release-diagnostics/ 2>/dev/null
+          cp avd-list.txt release-diagnostics/ 2>/dev/null
+          cp disk-before-verification.txt release-diagnostics/ 2>/dev/null
+          cp -R "$CONNECTX_VERIFY_OUT" release-diagnostics/verification 2>/dev/null
+          "$ANDROID_SDK_ROOT/platform-tools/adb" -s "$ADB_SERIAL" logcat -d \
+            > release-diagnostics/logcat.txt 2>&1
+
+      - name: Stop release emulator
+        if: always()
+        shell: bash
+        run: |
+          "$ANDROID_SDK_ROOT/platform-tools/adb" -s "$ADB_SERIAL" emu kill || true
+          if [[ -f emulator.pid ]]; then
+            kill "$(cat emulator.pid)" 2>/dev/null || true
+          fi
+
+      - name: Upload release verification diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha3-release-verification-${{ github.sha }}
+          path: release-diagnostics
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Prepare deterministic release assets
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p release-assets
-          cp downloaded/apk/app-debug.apk \
+          mkdir -p release-assets native-package
+          cp "$CONNECTX_VERIFY_OUT/apk/ConnectX-v0.3.0-alpha.3-debug.apk" \
             release-assets/ConnectX-v0.3.0-alpha.3-debug.apk
+          cp -R "$CONNECTX_VERIFY_OUT/native/jniLibs" native-package/jniLibs
 
-          find downloaded/native -type f -exec touch -t 198001010000 {} +
-          (cd downloaded/native && \
+          find native-package -type f -exec touch -t 198001010000 {} +
+          (cd native-package && \
             find . -type f -print0 | sort -z | \
             xargs -0 zip -X "$GITHUB_WORKSPACE/release-assets/ConnectX-v0.3.0-alpha.3-native.zip")
 
@@ -175,12 +220,15 @@ jobs:
           cp licenses/tun2socks-MIT.txt release-assets/tun2socks-MIT.txt
           cp licenses/gvisor-LICENSE.txt release-assets/gvisor-LICENSE.txt
           (cd release-assets && sha256sum * > CHECKSUMS.txt)
+
+          test -s release-assets/ConnectX-v0.3.0-alpha.3-debug.apk
+          test -s release-assets/ConnectX-v0.3.0-alpha.3-native.zip
           test -s release-assets/CHECKSUMS.txt
 
       - name: Upload prepared release assets
         uses: actions/upload-artifact@v4
         with:
-          name: strategy-alpha3-release-assets-${{ needs.select-release.outputs.target_sha }}
+          name: alpha3-release-assets-${{ github.sha }}
           path: release-assets
           if-no-files-found: error
           retention-days: 14
@@ -197,68 +245,46 @@ jobs:
             ref_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG_NAME")"
             object_type="$(jq -r '.object.type' <<<"$ref_json")"
             object_sha="$(jq -r '.object.sha' <<<"$ref_json")"
-
             if [[ "$object_type" == "tag" ]]; then
               tag_json="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
               object_type="$(jq -r '.object.type' <<<"$tag_json")"
               object_sha="$(jq -r '.object.sha' <<<"$tag_json")"
             fi
-
-            if [[ "$object_type" != "commit" ]]; then
-              echo "Tag $TAG_NAME does not resolve to a commit." >&2
-              return 1
-            fi
+            test "$object_type" = "commit"
             printf '%s\n' "$object_sha"
           }
 
-          verify_or_upload_assets() {
-            local names asset_path asset_name downloaded_path
-            mkdir -p existing-release-assets
-            names="$(gh release view "$TAG_NAME" \
+          if gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            existing_sha="$(resolve_tag_commit)"
+            test "$existing_sha" = "$TARGET_SHA"
+            test "$(gh release view "$TAG_NAME" \
               --repo "$GITHUB_REPOSITORY" \
-              --json assets \
-              --jq '.assets[].name')"
+              --json isPrerelease \
+              --jq '.isPrerelease')" = "true"
 
+            mkdir -p existing-release-assets
             for asset_path in release-assets/*; do
               asset_name="$(basename "$asset_path")"
-              if grep -Fxq "$asset_name" <<<"$names"; then
+              if gh release view "$TAG_NAME" \
+                --repo "$GITHUB_REPOSITORY" \
+                --json assets \
+                --jq '.assets[].name' | grep -Fxq "$asset_name"; then
                 gh release download "$TAG_NAME" \
                   --repo "$GITHUB_REPOSITORY" \
                   --pattern "$asset_name" \
                   --dir existing-release-assets
-                downloaded_path="existing-release-assets/$asset_name"
-                test -s "$downloaded_path"
-                if ! cmp -s "$asset_path" "$downloaded_path"; then
-                  echo "Existing release asset $asset_name differs from exact-commit output."
-                  exit 1
-                fi
+                cmp -s "$asset_path" "existing-release-assets/$asset_name"
               else
                 gh release upload "$TAG_NAME" "$asset_path" \
                   --repo "$GITHUB_REPOSITORY"
               fi
             done
-          }
 
-          if gh release view "$TAG_NAME" \
-            --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            existing_sha="$(resolve_tag_commit)"
-            if [[ "$existing_sha" != "$TARGET_SHA" ]]; then
-              echo "Existing tag $TAG_NAME points to $existing_sha, expected $TARGET_SHA."
-              exit 1
-            fi
-
-            metadata="$(gh release view "$TAG_NAME" \
-              --repo "$GITHUB_REPOSITORY" \
-              --json isPrerelease)"
-            test "$(jq -r '.isPrerelease' <<<"$metadata")" = "true"
-
-            verify_or_upload_assets
             gh release edit "$TAG_NAME" \
               --repo "$GITHUB_REPOSITORY" \
               --title "ConnectX v0.3.0-alpha.3 — Restricted-network TLS Evidence Lab" \
               --notes-file docs/releases/v0.3.0-alpha.3.md \
               --prerelease
-            echo "Verified existing prerelease $TAG_NAME at $TARGET_SHA."
             exit 0
           fi
 
