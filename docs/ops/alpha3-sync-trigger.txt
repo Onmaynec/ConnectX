@@ -1,1 +1,1 @@
-Trigger the trusted alpha.3 merge inspector after the pull_request_target workflow was installed on main.
+Trigger the one-time alpha.3 synchronization job after it was installed on main.
