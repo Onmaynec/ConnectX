@@ -1,1 +1,1 @@
-Trigger the temporary alpha.3 merge inspector after the workflow was installed on main.
+Trigger the temporary alpha.3 merge inspector after the observable PR workflow was installed on main.
