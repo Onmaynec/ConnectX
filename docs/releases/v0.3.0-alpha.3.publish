@@ -1,3 +1,3 @@
 Publish ConnectX v0.3.0-alpha.3 from the exact main commit after Android CI passes build, unit tests, lint, APK payload verification, Strategy Foundation, TLS split, A/B/A evaluation, external TLS evidence, JNI, TCP, UDP and DNS runtime gates.
 
-Re-activated after adding the required `## [0.3.0-alpha.3]` changelog metadata.
+Final activation after adding the alpha.3 changelog and verified release notes. No further metadata changes are expected before publication.
