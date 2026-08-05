@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - ops/alpha3-sync-trigger
+  pull_request:
+    branches:
+      - main
+    paths:
+      - docs/ops/alpha3-sync-trigger.txt
 
 permissions:
   contents: read
