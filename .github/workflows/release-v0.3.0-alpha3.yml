@@ -16,15 +16,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  prepare-and-publish:
-    name: Publish exact successful Android CI output
+  select-release:
+    name: Select exact alpha.3 activation
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
+    outputs:
+      activated: ${{ steps.select.outputs.activated }}
+      target_sha: ${{ steps.select.outputs.target_sha }}
+      run_id: ${{ steps.select.outputs.run_id }}
     env:
       TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
       RUN_ID: ${{ github.event.workflow_run.id }}
-      TAG_NAME: v0.3.0-alpha.3
       MARKER_PATH: docs/releases/v0.3.0-alpha.3.publish
 
     steps:
@@ -34,12 +37,15 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 2
 
-      - name: Verify exact Android CI event and release activation
+      - name: Select trusted marker activation
+        id: select
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
+          echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
 
           actual_sha="$(git rev-parse HEAD)"
           if [[ "$actual_sha" != "$TARGET_SHA" ]]; then
@@ -58,8 +64,39 @@ jobs:
 
           parent_sha="$(git rev-parse "$TARGET_SHA^1")"
           git diff --name-only "$parent_sha" "$TARGET_SHA" | tee release-changed-files.txt
-          grep -Fxq "$MARKER_PATH" release-changed-files.txt
+          if ! grep -Fxq "$MARKER_PATH" release-changed-files.txt; then
+            echo "activated=false" >> "$GITHUB_OUTPUT"
+            echo "This successful main CI run did not change the alpha.3 publish marker; skipping."
+            exit 0
+          fi
 
+          test -s "$MARKER_PATH"
+          grep -Fq 'Publish ConnectX v0.3.0-alpha.3' "$MARKER_PATH"
+          echo "activated=true" >> "$GITHUB_OUTPUT"
+
+  prepare-and-publish:
+    name: Publish exact successful Android CI output
+    needs: select-release
+    if: ${{ needs.select-release.outputs.activated == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TARGET_SHA: ${{ needs.select-release.outputs.target_sha }}
+      RUN_ID: ${{ needs.select-release.outputs.run_id }}
+      TAG_NAME: v0.3.0-alpha.3
+      MARKER_PATH: docs/releases/v0.3.0-alpha.3.publish
+
+    steps:
+      - name: Checkout exact release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.select-release.outputs.target_sha }}
+
+      - name: Verify release metadata and safety docs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           grep -Fq 'Publish ConnectX v0.3.0-alpha.3' "$MARKER_PATH"
           grep -Fq 'versionCode = 10' app/build.gradle.kts
           grep -Fq 'versionName = "0.3.0-alpha.3"' app/build.gradle.kts
@@ -84,15 +121,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p downloaded/apk downloaded/native
-          gh run download "$RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name "connectx-debug-$TARGET_SHA" \
-            --dir downloaded/apk
-          gh run download "$RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name "connectx-native-$TARGET_SHA" \
-            --dir downloaded/native
+          for attempt in 1 2 3 4 5; do
+            rm -rf downloaded
+            mkdir -p downloaded/apk downloaded/native
+            if gh run download "$RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "connectx-debug-$TARGET_SHA" \
+              --dir downloaded/apk && \
+              gh run download "$RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "connectx-native-$TARGET_SHA" \
+              --dir downloaded/native; then
+              break
+            fi
+
+            if (( attempt == 5 )); then
+              echo "Exact Android CI artifacts were unavailable after $attempt attempts."
+              exit 1
+            fi
+            sleep $((attempt * 10))
+          done
+
           test -s downloaded/apk/app-debug.apk
           test -s downloaded/native/jniLibs/arm64-v8a/libconnectxbridge.so
           test -s downloaded/native/jniLibs/x86_64/libconnectxbridge.so
@@ -131,7 +180,7 @@ jobs:
       - name: Upload prepared release assets
         uses: actions/upload-artifact@v4
         with:
-          name: strategy-alpha3-release-assets-${{ github.event.workflow_run.head_sha }}
+          name: strategy-alpha3-release-assets-${{ needs.select-release.outputs.target_sha }}
           path: release-assets
           if-no-files-found: error
           retention-days: 14
