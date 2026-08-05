@@ -29,6 +29,8 @@ const (
 	CodeStackInit      = 5
 )
 
+const bridgeReleaseVersion = "0.3.0-alpha.3"
+
 var upstreamCommit = "unknown"
 
 var (
@@ -64,7 +66,7 @@ var (
 )
 
 func Version() string {
-	return "connectx-go-bridge/0.2.0-alpha.6 upstream/" + upstreamCommit
+	return "connectx-go-bridge/" + bridgeReleaseVersion + " upstream/" + upstreamCommit
 }
 
 // TransportDiagnostics is deliberately payload-free and exposes only the
@@ -161,25 +163,22 @@ func Start(
 	return CodeOK, nil
 }
 
-// Stop is serialized with Start and idempotently releases the native stack,
-// tunnel workers and duplicated TUN descriptor. The device is closed before
-// stack.Wait so a blocking TUN reader cannot keep the stack shutdown alive.
 func Stop() error {
 	stateMu.Lock()
-	defer stateMu.Unlock()
-
 	session := active
 	active = nil
+	stateMu.Unlock()
+
 	if session == nil {
 		return nil
 	}
 
-	session.tunnel.Close()
-	// Match tun2socks engine shutdown semantics: closing the fd-backed device
-	// first interrupts its packet reader before waiting for gVisor workers.
+	// Closing the device first unblocks the reader owned by gVisor. Waiting on
+	// the stack before closing the device can deadlock a real Android TUN stop.
 	session.device.Close()
 	session.stack.Close()
 	session.stack.Wait()
+	session.tunnel.Close()
 	return nil
 }
 

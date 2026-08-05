@@ -103,7 +103,7 @@ jobs:
   android-runtime-smoke:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -219,7 +219,7 @@ jobs:
           "$ADB" shell getprop ro.product.cpu.abi
           "$ADB" shell getprop ro.build.version.sdk
 
-      - name: Run isolated strategy, A/B/A, JNI, TCP, UDP and DNS gates
+      - name: Run isolated strategy, evidence, JNI, TCP, UDP and DNS gates
         shell: bash
         run: |
           set -euo pipefail
@@ -276,6 +276,9 @@ jobs:
           run_app_gate \
             strategy-evaluation \
             dev.connectx.app.StrategyEvaluationInstrumentedTest
+          run_app_gate \
+            external-tls-evidence \
+            dev.connectx.app.ExternalTlsEvidenceInstrumentedTest
 
           gradle --no-daemon :vpn:nativebridge:connectedDebugAndroidTest
           reset_vpn_process
