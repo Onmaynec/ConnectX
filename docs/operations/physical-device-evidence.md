@@ -20,6 +20,21 @@ Alpha.7 подготавливает воспроизводимую провер
 
 После успешного teardown процесс считается warmed. Перед второй и третьей сессиями снимается новый FD baseline. Terminal sample выполняется только после `stopSelf()` и `VpnService.onDestroy`: снимок должен стабилизироваться в двух последовательных чтениях с интервалом 100 мс и ограничением в восемь попыток. Это исключает Android framework descriptors, закрывающиеся при уничтожении сервиса, но не скрывает повторяемый рост после teardown. Бюджет остаётся равным `4`.
 
+## Синхронный native flow drain
+
+Upstream tunnel dispatcher создаёт отдельные TCP/UDP workers. Отмена dispatcher сама по себе не гарантирует, что уже запущенные workers завершили двунаправленное копирование и закрыли proxy-side sockets.
+
+ConnectX оборачивает SOCKS5 dialer локальным `flowTracker`:
+
+1. каждое успешно созданное remote TCP/UDP-соединение регистрируется;
+2. `Stop()` закрывает TUN device, чтобы прекратить новые пакеты;
+3. все tracked remote sockets принудительно закрываются, чтобы разблокировать обе стороны copy workers;
+4. gVisor stack закрывается и полностью ожидается;
+5. tunnel dispatcher отменяется;
+6. повторно закрываются соединения, попавшие в race;
+7. Stop возвращает успех только после удаления всех tracked flows;
+8. bounded timeout в три секунды превращается в явную ошибку, а не в скрытый фоновой worker.
+
 Для отладки превышения CI пишет только агрегированные категории `socket`, `pipe`, `anon_inode`, `device`, `file` и `other`. Ссылки `/proc/self/fd`, пути файлов и назначения сокетов не сохраняются и не попадают в shareable report или bundle.
 
 Collector не записывает serial, model, manufacturer, fingerprint, SSID, hostname, IPv4 или содержимое трафика. Raw Gradle/ADB output не включается в shareable bundle.
