@@ -1,0 +1,36 @@
+name: Apply alpha.7 FD category diagnostics
+
+on:
+  push:
+    branches:
+      - feature/v0.3.0-alpha7
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-alpha7-fd-category-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v0.3.0-alpha7
+          fetch-depth: 2
+      - name: Apply and remove diagnostics patch files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/add_alpha7_fd_category_diagnostics.py
+          git rm -f \
+            scripts/add_alpha7_fd_category_diagnostics.py \
+            .github/workflows/apply-alpha7-fd-category-diagnostics.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "diag: log privacy-safe FD category snapshots"
+          git push origin HEAD:feature/v0.3.0-alpha7
