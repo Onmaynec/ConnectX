@@ -41,6 +41,7 @@ class DirectTcpRelay(
     private val connectionSlots = Semaphore(maxConcurrentConnections, true)
     private val activeSockets = ConcurrentHashMap.newKeySet<Socket>()
     private val activeDatagramSockets = ConcurrentHashMap.newKeySet<DatagramSocket>()
+    private val activeWorkers = ConcurrentHashMap.newKeySet<Thread>()
     private val serverSocketReference = AtomicReference<ServerSocket?>(null)
     private val acceptThreadReference = AtomicReference<Thread?>(null)
 
@@ -69,6 +70,10 @@ class DirectTcpRelay(
     @Synchronized
     fun start(): Int {
         if (running.get()) return listeningPort
+
+        check(activeWorkers.isEmpty()) {
+            "Relay cannot restart while previous workers are still active"
+        }
 
         val serverSocket = ServerSocket().apply {
             reuseAddress = true
@@ -101,27 +106,58 @@ class DirectTcpRelay(
         udpDownloadedBytes = udpDownloadedByteCount.get(),
     )
 
+    internal fun activeWorkerCountForTest(): Int = activeWorkers.size
+
     override fun close() {
         stop()
     }
 
     @Synchronized
     fun stop() {
-        if (!running.getAndSet(false)) return
+        val wasRunning = running.getAndSet(false)
+        if (!wasRunning && activeWorkers.isEmpty()) return
 
         serverSocketReference.getAndSet(null).closeQuietly()
         activeSockets.toList().forEach { socket -> socket.closeQuietly() }
-        activeSockets.clear()
         activeDatagramSockets.toList().forEach { socket -> socket.closeQuietly() }
-        activeDatagramSockets.clear()
 
-        acceptThreadReference.getAndSet(null)?.let { thread ->
-            if (thread !== Thread.currentThread()) {
-                thread.join(STOP_JOIN_TIMEOUT_MILLIS)
+        acceptThreadReference.getAndSet(null)?.interrupt()
+        awaitWorkerShutdown()
+
+        activeSockets.clear()
+        activeDatagramSockets.clear()
+        listeningPort = 0
+    }
+
+    private fun awaitWorkerShutdown() {
+        val currentThread = Thread.currentThread()
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
+            STOP_WORKERS_TIMEOUT_MILLIS,
+        )
+
+        while (System.nanoTime() < deadline) {
+            val workers = activeWorkers.filter { worker -> worker !== currentThread }
+            if (workers.isEmpty()) return
+
+            workers.forEach { worker ->
+                val remainingNanos = deadline - System.nanoTime()
+                if (remainingNanos <= 0L) return@forEach
+                val joinMillis = TimeUnit.NANOSECONDS
+                    .toMillis(remainingNanos)
+                    .coerceAtLeast(1L)
+                    .coerceAtMost(STOP_JOIN_SLICE_MILLIS)
+                worker.join(joinMillis)
             }
         }
 
-        listeningPort = 0
+        val remainingWorkers = activeWorkers
+            .filter { worker -> worker !== currentThread }
+            .map(Thread::getName)
+            .sorted()
+        check(remainingWorkers.isEmpty()) {
+            "Relay workers did not stop within ${STOP_WORKERS_TIMEOUT_MILLIS}ms: " +
+                remainingWorkers.joinToString()
+        }
     }
 
     private fun acceptLoop(serverSocket: ServerSocket) {
@@ -453,8 +489,20 @@ class DirectTcpRelay(
     private fun daemonThread(
         name: String,
         block: () -> Unit,
-    ): Thread = Thread({ block() }, name).apply {
-        isDaemon = true
+    ): Thread {
+        lateinit var worker: Thread
+        worker = Thread(
+            {
+                try {
+                    block()
+                } finally {
+                    activeWorkers -= Thread.currentThread()
+                }
+            },
+            name,
+        ).apply { isDaemon = true }
+        activeWorkers += worker
+        return worker
     }
 
     private companion object {
@@ -462,7 +510,8 @@ class DirectTcpRelay(
         const val DEFAULT_CONNECT_TIMEOUT_MILLIS = 10_000
         const val DEFAULT_MAX_CONNECTIONS = 32
         const val HANDSHAKE_TIMEOUT_MILLIS = 10_000
-        const val STOP_JOIN_TIMEOUT_MILLIS = 2_000L
+        const val STOP_WORKERS_TIMEOUT_MILLIS = 5_000L
+        const val STOP_JOIN_SLICE_MILLIS = 250L
         const val RELAY_WAIT_SLICE_MILLIS = 250L
         const val UDP_ASSOCIATION_POLL_MILLIS = 250
         const val UDP_OUTBOUND_TIMEOUT_MILLIS = 5_000
