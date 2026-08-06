@@ -31,6 +31,16 @@ jobs:
             echo "alpha.7 patch script is not present yet"
             exit 0
           fi
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("scripts/apply_alpha7.py")
+          text = path.read_text(encoding="utf-8")
+          old = '"Alpha.7 выполняет по три попытки baseline, TLS split и recovery, классифицирует доказательность и проверяет отчёт по allow-list schema.",'
+          new = '"Alpha.6 выполняет по три попытки baseline, TLS split и recovery, классифицирует доказательность и проверяет отчёт по allow-list schema.",'
+          if old not in text:
+              raise SystemExit("alpha.7 disclosure anchor fix target not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
           python3 scripts/apply_alpha7.py
           chmod +x \
             scripts/verify-alpha7-local.sh \
