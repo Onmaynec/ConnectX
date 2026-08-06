@@ -7,8 +7,35 @@ All notable changes to ConnectX are documented in this file.
 ### Planned
 
 - Transport-level observation of actual TCP segment boundaries.
-- Physical-device repeated TUN lifecycle verification.
+- Execute the alpha.7 kit on a physical arm64 device and attach its validated bundle.
 - First strategy verified on a reproducible restricted network.
+
+## [0.3.0-alpha.7]
+
+### Added
+
+- Privacy-safe physical/emulator classification, Android API and broad ABI family for evidence reports.
+- File-descriptor before/after/delta measurements taken around complete external evidence teardown.
+- Typed bounded FD lifecycle assessment with explicit `WITHIN_BUDGET`, `EXCEEDED` and `UNKNOWN` states.
+- Redacted report schema v3 with environment and FD aggregate fields in the deterministic report ID.
+- Three sequential TEST-NET TUN/native evidence sessions in Android instrumentation.
+- Strict physical arm64 evidence collector and allow-list bundle validator.
+- Negative tests rejecting device identifiers, raw targets, URLs, credentials and unknown bundle fields.
+- Application version `0.3.0-alpha.7`, versionCode `14`.
+- Native bridge version `connectx-go-bridge/0.3.0-alpha.7`.
+
+### Changed
+
+- External evidence now reports FD lifecycle only after native session, TUN and relay teardown complete.
+- Physical-device readiness evidence is separated from the manual restricted-network strategy claim.
+
+### Safety boundaries
+
+- No serial, model, manufacturer, fingerprint, SSID or network identifier is exported.
+- TUN capture remains limited to TEST-NET-1 (`192.0.2.0/24`).
+- Ordinary application traffic is not routed or modified.
+- No HTTP, account data, MITM or HTTPS decryption is introduced.
+- Issues #11 and #22 remain open until actual physical-device evidence is attached.
 
 ## [0.3.0-alpha.6]
 

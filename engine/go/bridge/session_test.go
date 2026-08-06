@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"golang.org/x/sys/unix"
+	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
 func TestVersionContainsReleaseAndPinnedCommit(t *testing.T) {
@@ -13,8 +15,8 @@ func TestVersionContainsReleaseAndPinnedCommit(t *testing.T) {
 	t.Cleanup(func() { upstreamCommit = previous })
 
 	got := Version()
-	if !strings.HasPrefix(got, "connectx-go-bridge/0.3.0-alpha.6 upstream/") {
-		t.Fatalf("Version() = %q, expected alpha.5 release prefix", got)
+	if !strings.HasPrefix(got, "connectx-go-bridge/0.3.0-alpha.7 upstream/") {
+		t.Fatalf("Version() = %q, expected alpha.7 release prefix", got)
 	}
 	if !strings.Contains(got, "test-commit") {
 		t.Fatalf("Version() = %q, expected pinned commit", got)
@@ -56,6 +58,26 @@ func TestRejectedStartClosesTransferredDescriptor(t *testing.T) {
 
 	if _, err := unix.FcntlInt(uintptr(fds[0]), unix.F_GETFD, 0); err == nil {
 		t.Fatal("transferred descriptor remains open after failed start")
+	}
+}
+
+func TestSingleNICIDRequiresExactlyOneNIC(t *testing.T) {
+	if _, err := singleNICID(nil); err == nil {
+		t.Fatal("singleNICID(nil) succeeded")
+	}
+	if _, err := singleNICID(map[tcpip.NICID]stack.NICInfo{
+		1: {},
+		2: {},
+	}); err == nil {
+		t.Fatal("singleNICID(two NICs) succeeded")
+	}
+
+	got, err := singleNICID(map[tcpip.NICID]stack.NICInfo{7: {}})
+	if err != nil {
+		t.Fatalf("singleNICID(one NIC): %v", err)
+	}
+	if got != 7 {
+		t.Fatalf("singleNICID(one NIC) = %d, expected 7", got)
 	}
 }
 

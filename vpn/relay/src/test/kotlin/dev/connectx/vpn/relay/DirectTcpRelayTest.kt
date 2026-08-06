@@ -97,6 +97,7 @@ class DirectTcpRelayTest {
             assertTrue(stats.downloadedBytes > 0)
         } finally {
             relay.close()
+            assertEquals(0, relay.activeWorkerCountForTest())
             echoServer.close()
         }
     }
@@ -142,6 +143,7 @@ class DirectTcpRelayTest {
             assertTrue(awaitFailedConnections(relay).failedConnections > 0)
         } finally {
             relay.close()
+            assertEquals(0, relay.activeWorkerCountForTest())
         }
     }
 
@@ -184,6 +186,67 @@ class DirectTcpRelayTest {
             assertTrue(awaitFailedConnections(relay).failedConnections > 0)
         } finally {
             relay.close()
+            assertEquals(0, relay.activeWorkerCountForTest())
+        }
+    }
+
+    @Test
+    fun `stop waits for blocked client and copy workers`() {
+        val targetServer = ServerSocket().apply {
+            bind(InetSocketAddress(ipv4Loopback, 0))
+        }
+        val targetAccepted = AtomicBoolean(false)
+        val targetThread = thread(
+            start = true,
+            isDaemon = true,
+            name = "connectx-test-blocked-target",
+        ) {
+            targetServer.accept().use {
+                targetAccepted.set(true)
+                while (!Thread.currentThread().isInterrupted) {
+                    Thread.sleep(50)
+                }
+            }
+        }
+        val relay = DirectTcpRelay(
+            socketProtector = SocketProtector { true },
+            credentials = credentials,
+        )
+        val client = Socket()
+
+        try {
+            client.connect(InetSocketAddress(ipv4Loopback, relay.start()))
+            val input = DataInputStream(client.getInputStream())
+            val output = DataOutputStream(client.getOutputStream())
+            authenticate(input, output, credentials)
+            val targetPort = targetServer.localPort
+            output.write(
+                byteArrayOf(
+                    0x05,
+                    0x01,
+                    0x00,
+                    0x01,
+                    127,
+                    0,
+                    0,
+                    1,
+                    (targetPort ushr 8).toByte(),
+                    targetPort.toByte(),
+                ),
+            )
+            output.flush()
+            input.readFully(ByteArray(10))
+            assertTrue(awaitCondition { targetAccepted.get() })
+            assertTrue(awaitCondition { relay.activeWorkerCountForTest() >= 4 })
+
+            relay.close()
+            assertEquals(0, relay.activeWorkerCountForTest())
+            assertEquals(0L, relay.stats().activeConnections)
+        } finally {
+            client.close()
+            relay.close()
+            targetThread.interrupt()
+            targetServer.close()
         }
     }
 
@@ -208,6 +271,14 @@ class DirectTcpRelayTest {
             stats = relay.stats()
         }
         return stats
+    }
+
+    private fun awaitCondition(condition: () -> Boolean): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        while (!condition() && System.nanoTime() < deadline) {
+            Thread.sleep(10)
+        }
+        return condition()
     }
 
     private fun authenticate(

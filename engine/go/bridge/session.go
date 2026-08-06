@@ -9,12 +9,12 @@ import (
 	"sync/atomic"
 
 	"golang.org/x/sys/unix"
+	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 
 	"github.com/xjasonlyu/tun2socks/v2/core"
 	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
-	"github.com/xjasonlyu/tun2socks/v2/core/device/fdbased"
 	"github.com/xjasonlyu/tun2socks/v2/proxy/socks5"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel/statistic"
@@ -29,7 +29,7 @@ const (
 	CodeStackInit      = 5
 )
 
-const bridgeReleaseVersion = "0.3.0-alpha.6"
+const bridgeReleaseVersion = "0.3.0-alpha.7"
 
 var upstreamCommit = "unknown"
 
@@ -43,7 +43,9 @@ var (
 type Session struct {
 	device device.Device
 	stack  *stack.Stack
+	nicID  tcpip.NICID
 	tunnel *tunnel.Tunnel
+	flows  *flowTracker
 }
 
 type countingTransportHandler struct {
@@ -122,7 +124,7 @@ func Start(
 		return CodeInvalidInput, errors.New("SOCKS5 endpoint must use a numeric loopback address")
 	}
 
-	proxy, err := socks5.New(
+	rawProxy, err := socks5.New(
 		net.JoinHostPort(host, strconv.Itoa(port)),
 		username,
 		password,
@@ -131,7 +133,7 @@ func Start(
 		return CodeProxyInit, fmt.Errorf("create SOCKS5 proxy: %w", err)
 	}
 
-	dev, err := fdbased.Open(strconv.Itoa(tunFD), uint32(mtu), 0)
+	dev, err := openChannelTun(tunFD, uint32(mtu))
 	if err != nil {
 		return CodeDeviceInit, fmt.Errorf("open TUN fd: %w", err)
 	}
@@ -141,7 +143,14 @@ func Start(
 	udpFlowCount.Store(0)
 	manager := statistic.DefaultManager
 	manager.ResetStatistic()
-	transport := tunnel.New(proxy, manager)
+	flows := newFlowTracker()
+	transport := tunnel.New(
+		&trackedDialer{
+			delegate: rawProxy,
+			tracker:  flows,
+		},
+		manager,
+	)
 	transport.ProcessAsync()
 	countingHandler := &countingTransportHandler{delegate: transport}
 
@@ -155,12 +164,36 @@ func Start(
 		return CodeStackInit, fmt.Errorf("create gVisor stack: %w", err)
 	}
 
+	nicID, err := singleNICID(netstack.NICInfo())
+	if err != nil {
+		for id := range netstack.NICInfo() {
+			_ = netstack.RemoveNIC(id)
+		}
+		netstack.Close()
+		netstack.Wait()
+		transport.Close()
+		dev.Close()
+		return CodeStackInit, err
+	}
+
 	active = &Session{
 		device: dev,
 		stack:  netstack,
+		nicID:  nicID,
 		tunnel: transport,
+		flows:  flows,
 	}
 	return CodeOK, nil
+}
+
+func singleNICID(nics map[tcpip.NICID]stack.NICInfo) (tcpip.NICID, error) {
+	if len(nics) != 1 {
+		return 0, fmt.Errorf("expected exactly one gVisor NIC, got %d", len(nics))
+	}
+	for id := range nics {
+		return id, nil
+	}
+	panic("unreachable: one-entry NIC map had no key")
 }
 
 func Stop() error {
@@ -173,13 +206,35 @@ func Stop() error {
 		return nil
 	}
 
-	// Closing the device first unblocks the reader owned by gVisor. Waiting on
-	// the stack before closing the device can deadlock a real Android TUN stop.
+	// Stop proxy-side work first and detach the pure-Go channel endpoint while
+	// the owned TUN workers are still alive. RemoveNIC prevents further packet
+	// delivery without allocating or depending on gVisor kernel poller state.
+	session.flows.requestCloseAll()
+	var detachError error
+	if session.stack.HasNIC(session.nicID) {
+		if err := session.stack.RemoveNIC(session.nicID); err != nil {
+			detachError = fmt.Errorf("detach gVisor NIC %d: %s", session.nicID, err)
+		}
+	}
+
+	// channelTun cancellation stops both bounded workers before the numeric TUN
+	// descriptor is closed, preventing FD reuse races during teardown.
 	session.device.Close()
 	session.stack.Close()
 	session.stack.Wait()
+
+	// No new flow can be emitted after NIC detach. Cancel the dispatcher,
+	// interrupt any connection that raced with the first snapshot, and require
+	// every tunnel worker to reach its deferred wrapper Close.
 	session.tunnel.Close()
-	return nil
+	session.flows.requestCloseAll()
+	if !session.flows.waitEmpty(flowDrainTimeout) {
+		return fmt.Errorf(
+			"timed out draining %d native remote flow(s)",
+			session.flows.count(),
+		)
+	}
+	return detachError
 }
 
 func IsRunning() bool {

@@ -64,6 +64,12 @@ object TunnelContract {
         "dev.connectx.extra.EVIDENCE_RECOVERY_SUCCESSES"
     const val EXTRA_EVIDENCE_RECOVERY_FAILURES =
         "dev.connectx.extra.EVIDENCE_RECOVERY_FAILURES"
+    const val EXTRA_EVIDENCE_FD_BEFORE =
+        "dev.connectx.extra.EVIDENCE_FD_BEFORE"
+    const val EXTRA_EVIDENCE_FD_AFTER =
+        "dev.connectx.extra.EVIDENCE_FD_AFTER"
+    const val EXTRA_EVIDENCE_FD_DELTA =
+        "dev.connectx.extra.EVIDENCE_FD_DELTA"
 
     // Honored only when the installed application is debuggable. Release builds
     // reject these values before opening any relay or TUN resource.

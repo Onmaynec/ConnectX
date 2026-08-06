@@ -10,9 +10,9 @@ ConnectX не является сервисом удалённого VPN и не
 
 ConnectX не выполняет MITM, не расшифровывает HTTPS, не устанавливает пользовательские сертификаты и не записывает содержимое трафика.
 
-## Текущая версия разработки: v0.3.0-alpha.6
+## Текущая версия разработки: v0.3.0-alpha.7
 
-Alpha.6 сохраняет repeated TLS A/B/A-проверку и добавляет Evidence Quality Gate: результат получает формальный evidence class, уровень уверенности, безопасную рекомендацию и детерминированный report ID. Перед отправкой обезличенный отчёт проверяется по allow-list schema v2.
+Alpha.7 сохраняет Evidence Quality Gate и добавляет Physical Device Evidence Kit: broad device profile без уникальных идентификаторов, FD before/after после полного teardown, schema v3 report и строгий collector для физического arm64-устройства.
 
 ### Проверка TLS-стратегии
 
@@ -39,7 +39,11 @@ Evaluator требует минимум два успеха и допускае�
 - ограничение baseline не воспроизвелось;
 - данных недостаточно.
 
-В интерфейсе показываются success/failure counters, median latency, TLS record kind, decision, reason, evidence class, confidence и безопасный следующий шаг. Обезличенный отчёт schema v2 не получает hostname, IPv4, payload, credentials или raw error text; неизвестные поля, URL и credential-like fragments отклоняются до share intent. Детерминированный `report_id` позволяет сравнить два одинаковых агрегированных результата без сетевого идентификатора.
+В интерфейсе показываются success/failure counters, median latency, TLS record kind, evidence class, confidence, broad device class/API/ABI family и FD delta после полного teardown. Обезличенный отчёт schema v3 не получает hostname, IPv4, payload, credentials, serial, model, fingerprint, SSID или raw error text. Детерминированный `report_id` учитывает только агрегированные безопасные поля.
+
+### Проверка физического устройства
+
+После source-build native bridge запустите `scripts/collect-alpha7-physical-evidence.sh`. Скрипт принимает только одно physical `arm64-v8a` устройство, выполняет JNI и трёхкратный TEST-NET evidence lifecycle, проверяет FD budget и создаёт allow-list bundle без уникальных идентификаторов. Подробности: [`docs/operations/physical-device-evidence.md`](docs/operations/physical-device-evidence.md). Реальная restricted-network серия всё равно выполняется вручную из UI.
 
 ### Единый guarded prerelease
 
@@ -94,13 +98,13 @@ gradle --no-daemon :app:assembleDebug
 Полная локальная проверка alpha.6:
 
 ```bash
-scripts/verify-alpha6-local.sh --clean
+scripts/verify-alpha7-local.sh --clean
 ```
 
 Для Android runtime gates нужен уже запущенный Android 35 x86_64 emulator:
 
 ```bash
-scripts/verify-alpha6-local.sh --clean --device
+scripts/verify-alpha7-local.sh --clean --device
 ```
 
 Native bridge собирается скриптом:
@@ -144,4 +148,4 @@ GitHub Actions выполняет изолированные gates:
 
 ## Статус релиза
 
-`v0.3.0-alpha.6` публикуется только после полного Android CI на exact `main` commit. Отдельные version-specific publisher workflows больше не используются: release activation, provenance verification и идемпотентная публикация выполняются общим guarded workflow.
+`v0.3.0-alpha.7` публикуется только после полного Android CI на exact `main` commit. Отдельные version-specific publisher workflows больше не используются: release activation, provenance verification и идемпотентная публикация выполняются общим guarded workflow.

@@ -95,7 +95,7 @@ class NativeUdpProbeInstrumentedTest {
                 result.getStringExtra(TunnelContract.EXTRA_NATIVE_VERSION).orEmpty(),
                 result.getStringExtra(TunnelContract.EXTRA_NATIVE_VERSION)
                     .orEmpty()
-                    .startsWith("connectx-go-bridge/0.3.0-alpha.6"),
+                    .startsWith("connectx-go-bridge/0.3.0-alpha.7"),
             )
             assertTrue(
                 result.getLongExtra(TunnelContract.EXTRA_PROBE_LATENCY_MILLIS, 0L) >= 1L,
