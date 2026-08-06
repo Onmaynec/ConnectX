@@ -25,7 +25,7 @@ jobs:
           fetch-depth: 2
           token: ${{ github.token }}
 
-      - name: Apply reviewed alpha.5 patch
+      - name: Apply reviewed alpha.5 product patch
         shell: bash
         run: |
           set -euo pipefail
@@ -45,15 +45,21 @@ jobs:
           gzip -dc /tmp/alpha5.patch.gz > /tmp/alpha5.patch
           echo 'e980f3133f82c5affadcc3e2763e0757554115c0045d9b7a312100034b6eade4  /tmp/alpha5.patch' | sha256sum -c -
 
-          git apply --reject --exclude=README.md --exclude=CHANGELOG.md /tmp/alpha5.patch
+          git apply --reject \
+            --exclude=README.md \
+            --exclude=CHANGELOG.md \
+            --exclude='.github/workflows/*' \
+            /tmp/alpha5.patch
           test -z "$(find . -name '*.rej' -type f -print -quit)"
-          rm -rf "$stage_dir" .github/workflows/agent-apply-alpha5.yml
 
-          git add -A
+          git add -A -- \
+            ':(exclude).github/alpha5-stage/**' \
+            ':(exclude).github/workflows/agent-apply-alpha5.yml'
           git diff --cached --check
           test -n "$(git diff --cached --name-only)"
+          test -z "$(git diff --cached --name-only | grep '^\.github/workflows/' || true)"
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'feat: prepare ConnectX v0.3.0-alpha.5'
+          git commit -m 'feat: prepare ConnectX v0.3.0-alpha.5 product changes'
           git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
