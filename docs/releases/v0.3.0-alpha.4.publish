@@ -1,0 +1,3 @@
+Publish ConnectX v0.3.0-alpha.4 only from the exact main commit after the standalone release workflow passes every static and Android runtime gate.
+
+The release must contain the alpha.4 APK, native archive, notices and SHA-256 checksums.
