@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.ServiceInfo
@@ -647,40 +648,54 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         val completedFdKindsBefore = evidenceFdKindsBefore
         val shouldCooldown = gateGeneration == evidenceGeneration
         val cleanupError = closeResources()
-        val completedFdSnapshotAfter = currentFdSnapshot()
-        val completedFdAfter = completedFdSnapshotAfter?.total
-        Log.i(
-            FD_LOG_TAG,
-            "generation=$evidenceGeneration warmed=$processFdLifecycleWarmed " +
-                "before=${completedFdKindsBefore ?: "UNKNOWN"} " +
-                "after=${completedFdSnapshotAfter?.summary() ?: "UNKNOWN"}",
-        )
-        if (cleanupError == null && completedFdAfter != null) {
-            processFdLifecycleWarmed = true
-        }
         val result = outcome.getOrNull()
         if (result != null && cleanupError == null) {
-            publishStatus(
-                status = TunnelContract.STATUS_EXTERNAL_TLS_EVIDENCE_COMPLETED,
-                nativeVersion = completedVersion,
-                target = result.target,
-                result = result,
-                fdBefore = completedFdBefore,
-                fdAfter = completedFdAfter,
+            val statusContext = applicationContext
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            mainHandler.postDelayed(
+                {
+                    awaitStablePostTeardownFdSnapshot(
+                        previous = null,
+                        attemptsRemaining = POST_TEARDOWN_FD_MAX_ATTEMPTS,
+                    ) { completedFdSnapshotAfter ->
+                        val completedFdAfter = completedFdSnapshotAfter?.total
+                        Log.i(
+                            FD_LOG_TAG,
+                            "generation=$evidenceGeneration warmed=$processFdLifecycleWarmed " +
+                                "before=${completedFdKindsBefore ?: "UNKNOWN"} " +
+                                "after=${completedFdSnapshotAfter?.summary() ?: "UNKNOWN"}",
+                        )
+                        if (completedFdAfter != null) {
+                            processFdLifecycleWarmed = true
+                        }
+                        publishStatus(
+                            status = TunnelContract.STATUS_EXTERNAL_TLS_EVIDENCE_COMPLETED,
+                            nativeVersion = completedVersion,
+                            target = result.target,
+                            result = result,
+                            fdBefore = completedFdBefore,
+                            fdAfter = completedFdAfter,
+                            context = statusContext,
+                        )
+                    }
+                },
+                POST_TEARDOWN_FD_POLL_MILLIS,
             )
-        } else {
-            if (shouldCooldown) enterCooldownAfterFailure()
-            gateGeneration = null
-            val primary = outcome.exceptionOrNull()
-                ?: IllegalStateException(
-                    "External TLS evidence завершена, но ресурсы закрылись с ошибкой",
-                )
-            publishStatus(
-                status = TunnelContract.STATUS_ERROR,
-                nativeVersion = completedVersion,
-                error = buildFailureMessage(primary, cleanupError),
-            )
+            return
         }
+
+        if (shouldCooldown) enterCooldownAfterFailure()
+        gateGeneration = null
+        val primary = outcome.exceptionOrNull()
+            ?: IllegalStateException(
+                "External TLS evidence завершена, но ресурсы закрылись с ошибкой",
+            )
+        publishStatus(
+            status = TunnelContract.STATUS_ERROR,
+            nativeVersion = completedVersion,
+            error = buildFailureMessage(primary, cleanupError),
+        )
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -757,6 +772,28 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         return firstError
     }
 
+    private fun awaitStablePostTeardownFdSnapshot(
+        previous: FdSnapshot?,
+        attemptsRemaining: Int,
+        completion: (FdSnapshot?) -> Unit,
+    ) {
+        val current = currentFdSnapshot()
+        if (attemptsRemaining <= 1 || (current != null && current == previous)) {
+            completion(current)
+            return
+        }
+        mainHandler.postDelayed(
+            {
+                awaitStablePostTeardownFdSnapshot(
+                    previous = current,
+                    attemptsRemaining = attemptsRemaining - 1,
+                    completion = completion,
+                )
+            },
+            POST_TEARDOWN_FD_POLL_MILLIS,
+        )
+    }
+
     private fun currentFdSnapshot(): FdSnapshot? = runCatching {
         val directory = File("/proc/self/fd")
         val entries = directory.listFiles() ?: return@runCatching null
@@ -804,9 +841,10 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         result: ExternalTlsEvidenceResult? = null,
         fdBefore: Int? = null,
         fdAfter: Int? = null,
+        context: Context = this,
     ) {
         val intent = Intent(TunnelContract.ACTION_STATUS).apply {
-            setPackage(packageName)
+            setPackage(context.packageName)
             putExtra(TunnelContract.EXTRA_STATUS, status)
             putExtra(
                 TunnelContract.EXTRA_ENGINE_MODE,
@@ -925,7 +963,7 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
                 )
             }
         }
-        sendBroadcast(intent)
+        context.sendBroadcast(intent)
     }
 
     private fun promoteToForeground() {
@@ -1102,6 +1140,8 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         const val EVIDENCE_TEST_PORT = 18_445
         const val SAMPLES_PER_PHASE = 3
         const val FD_LOG_TAG = "ConnectX-FD"
+        const val POST_TEARDOWN_FD_POLL_MILLIS = 100L
+        const val POST_TEARDOWN_FD_MAX_ATTEMPTS = 8
         const val PHASE_TIMEOUT_MILLIS = 6_000
         const val ROUTE_SETTLE_MILLIS = 300L
         const val STRATEGY_WRITE_GAP_MILLIS = 25L
