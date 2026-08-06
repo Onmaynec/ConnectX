@@ -29,7 +29,7 @@ class ExternalTlsEvidenceReportTest {
             ),
         )
 
-        assertTrue(report.contains("ConnectX v0.3.0-alpha.4"))
+        assertTrue(report.contains("ConnectX v0.3.0-alpha.5"))
         assertTrue(report.contains("target_preset=telegram"))
         assertTrue(report.contains("target=redacted-public-host:443"))
         assertTrue(report.contains("samples_per_phase=3"))

@@ -29,7 +29,7 @@ const (
 	CodeStackInit      = 5
 )
 
-const bridgeReleaseVersion = "0.3.0-alpha.4"
+const bridgeReleaseVersion = "0.3.0-alpha.5"
 
 var upstreamCommit = "unknown"
 

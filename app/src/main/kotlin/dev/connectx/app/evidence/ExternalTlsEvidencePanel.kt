@@ -206,7 +206,7 @@ fun ExternalTlsEvidencePanel(
                 }
 
                 Text(
-                    text = "Alpha.4 выполняет по три попытки baseline, TLS split и recovery. " +
+                    text = "Alpha.5 выполняет по три попытки baseline, TLS split и recovery. " +
                         "Она не отправляет HTTP, не входит в аккаунт, не читает тело ответа и " +
                         "не расшифровывает HTTPS. Результат относится только к текущей сети.",
                     style = MaterialTheme.typography.bodySmall,
