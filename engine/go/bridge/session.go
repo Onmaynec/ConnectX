@@ -44,6 +44,7 @@ type Session struct {
 	device device.Device
 	stack  *stack.Stack
 	tunnel *tunnel.Tunnel
+	flows  *flowTracker
 }
 
 type countingTransportHandler struct {
@@ -122,7 +123,7 @@ func Start(
 		return CodeInvalidInput, errors.New("SOCKS5 endpoint must use a numeric loopback address")
 	}
 
-	proxy, err := socks5.New(
+	rawProxy, err := socks5.New(
 		net.JoinHostPort(host, strconv.Itoa(port)),
 		username,
 		password,
@@ -141,7 +142,14 @@ func Start(
 	udpFlowCount.Store(0)
 	manager := statistic.DefaultManager
 	manager.ResetStatistic()
-	transport := tunnel.New(proxy, manager)
+	flows := newFlowTracker()
+	transport := tunnel.New(
+		&trackedDialer{
+			delegate: rawProxy,
+			tracker:  flows,
+		},
+		manager,
+	)
 	transport.ProcessAsync()
 	countingHandler := &countingTransportHandler{delegate: transport}
 
@@ -159,6 +167,7 @@ func Start(
 		device: dev,
 		stack:  netstack,
 		tunnel: transport,
+		flows:  flows,
 	}
 	return CodeOK, nil
 }
@@ -173,12 +182,26 @@ func Stop() error {
 		return nil
 	}
 
-	// Closing the device first unblocks the reader owned by gVisor. Waiting on
-	// the stack before closing the device can deadlock a real Android TUN stop.
+	// Closing the device first unblocks the reader owned by gVisor. Active
+	// proxy-side connections are explicitly interrupted because upstream
+	// Tunnel.Close only cancels the dispatcher and does not wait for per-flow
+	// TCP/UDP copy workers.
 	session.device.Close()
+	session.flows.requestCloseAll()
 	session.stack.Close()
 	session.stack.Wait()
+
+	// No new flow can be emitted after the stack has stopped. Cancel the
+	// dispatcher, interrupt any connection that raced with the first snapshot,
+	// and require every tunnel worker to reach its deferred connection Close.
 	session.tunnel.Close()
+	session.flows.requestCloseAll()
+	if !session.flows.waitEmpty(flowDrainTimeout) {
+		return fmt.Errorf(
+			"timed out draining %d native remote flow(s)",
+			session.flows.count(),
+		)
+	}
 	return nil
 }
 

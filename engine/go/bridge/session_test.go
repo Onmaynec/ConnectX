@@ -14,7 +14,7 @@ func TestVersionContainsReleaseAndPinnedCommit(t *testing.T) {
 
 	got := Version()
 	if !strings.HasPrefix(got, "connectx-go-bridge/0.3.0-alpha.7 upstream/") {
-		t.Fatalf("Version() = %q, expected alpha.5 release prefix", got)
+		t.Fatalf("Version() = %q, expected alpha.7 release prefix", got)
 	}
 	if !strings.Contains(got, "test-commit") {
 		t.Fatalf("Version() = %q, expected pinned commit", got)
