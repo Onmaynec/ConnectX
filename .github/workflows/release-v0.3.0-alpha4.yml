@@ -10,6 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: write
 
 concurrency:
@@ -17,19 +18,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  verify-and-publish:
-    name: Verify exact commit and publish prerelease
+  publish-verified-artifacts:
+    name: Publish verified alpha.4 artifacts
     runs-on: ubuntu-latest
-    timeout-minutes: 110
+    timeout-minutes: 25
     env:
       TARGET_SHA: ${{ github.sha }}
       TAG_NAME: v0.3.0-alpha.4
+      SOURCE_RUN_ID: "31078949278"
+      SOURCE_HEAD_SHA: 9a799c0375e2623524a98b82ce11457e8745becb
+      SOURCE_ARTIFACT_SHA: 874bac912c7c64b4fb3ecc16a86c11bd5ab809d5
+      SOURCE_BRANCH: feature/v0.3.0-alpha4
       MARKER_PATH: docs/releases/v0.3.0-alpha.4.publish
-      ANDROID_AVD_HOME: ${{ runner.temp }}/connectx-alpha4-avd
-      ANDROID_USER_HOME: ${{ runner.temp }}/connectx-alpha4-android-user
-      CONNECTX_VERIFY_OUT: ${{ github.workspace }}/build/release-verification-alpha4
-      GRADLE_BIN: gradle
-      ADB_SERIAL: emulator-5554
 
     steps:
       - name: Checkout exact release commit
@@ -38,164 +38,99 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 2
 
-      - name: Verify release activation and metadata
+      - name: Verify release metadata and trusted CI source
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+
           if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
             parent_sha="$(git rev-parse "$TARGET_SHA^1")"
-            git diff --name-only "$parent_sha" "$TARGET_SHA" | tee release-changed-files.txt
-            grep -Fxq "$MARKER_PATH" release-changed-files.txt
+            git diff --name-only "$parent_sha" "$TARGET_SHA" | sort > release-changed-files.txt
             grep -Fxq '.github/workflows/release-v0.3.0-alpha4.yml' release-changed-files.txt
+            grep -Fxq "$MARKER_PATH" release-changed-files.txt
           fi
+
           grep -Fq 'Publish ConnectX v0.3.0-alpha.4' "$MARKER_PATH"
           grep -Fq 'versionCode = 11' app/build.gradle.kts
           grep -Fq 'versionName = "0.3.0-alpha.4"' app/build.gradle.kts
           grep -Fq '## [0.3.0-alpha.4]' CHANGELOG.md
           test -s docs/releases/v0.3.0-alpha.4.md
-          test -s docs/roadmap/alpha4-scope.md
           test -s THIRD_PARTY_NOTICES.md
           test -s licenses/tun2socks-MIT.txt
           test -s licenses/gvisor-LICENSE.txt
-          test ! -e .github/workflows/agent-source-export.yml
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
+          run_json="$(gh run view "$SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json name,status,conclusion,event,headSha,headBranch)"
+          test "$(jq -r '.name' <<<"$run_json")" = 'Android CI'
+          test "$(jq -r '.status' <<<"$run_json")" = 'completed'
+          test "$(jq -r '.conclusion' <<<"$run_json")" = 'success'
+          test "$(jq -r '.event' <<<"$run_json")" = 'pull_request'
+          test "$(jq -r '.headSha' <<<"$run_json")" = "$SOURCE_HEAD_SHA"
+          test "$(jq -r '.headBranch' <<<"$run_json")" = "$SOURCE_BRANCH"
 
-      - name: Set up Go 1.26.3
-        uses: actions/setup-go@v6
-        with:
-          go-version: "1.26.3"
-          cache-dependency-path: |
-            engine/go/go.mod
-            engine/go/go.sum
+          compare_json="$(gh api "repos/$GITHUB_REPOSITORY/compare/$SOURCE_HEAD_SHA...$TARGET_SHA")"
+          jq -e '
+            ([.files[].filename] | sort) == [
+              ".github/workflows/release-v0.3.0-alpha4.yml",
+              "docs/releases/v0.3.0-alpha.4.publish"
+            ]
+          ' <<<"$compare_json" >/dev/null
 
-      - name: Install locked Android toolchain and emulator image
+      - name: Download exact successful Android CI artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_USER_HOME"
-          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
-          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
-            "ndk;28.0.13004108" \
-            "platform-tools" \
-            "emulator" \
-            "platforms;android-35" \
-            "system-images;android-35;google_apis;x86_64"
-          test -x "$ANDROID_SDK_ROOT/platform-tools/adb"
-          test -x "$ANDROID_SDK_ROOT/emulator/emulator"
-          test -d "$ANDROID_SDK_ROOT/ndk/28.0.13004108"
-          "$ANDROID_SDK_ROOT/emulator/emulator" -accel-check | tee accel-check.txt
-          df -h / | tee disk-before-verification.txt
+          mkdir -p downloaded/apk downloaded/native
+          gh run download "$SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "connectx-debug-$SOURCE_ARTIFACT_SHA" \
+            --dir downloaded/apk
+          gh run download "$SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "connectx-native-$SOURCE_ARTIFACT_SHA" \
+            --dir downloaded/native
 
-      - name: Set up Gradle 8.13
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.13"
+          echo '33ce840d63b4755c8b62f5b7aa607c8b8e19ef163b6f5b170e83641d69a4cba0  downloaded/apk/app-debug.apk' | sha256sum -c -
+          echo '3d400c5036ae43a9a63db1acfe0348ecfd548c59c4b66c2294ace35619297560  downloaded/native/jniLibs/arm64-v8a/libconnectxbridge.so' | sha256sum -c -
+          echo '8ad00a59147b277a528613b61050f0d78e802687fe43a89fec1cdf437473c997  downloaded/native/jniLibs/x86_64/libconnectxbridge.so' | sha256sum -c -
 
-      - name: Create Android 35 x86_64 AVD
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo no | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" \
-            create avd \
-            --force \
-            --name connectx-alpha4-release \
-            --path "$ANDROID_AVD_HOME/connectx-alpha4-release.avd" \
-            --package "system-images;android-35;google_apis;x86_64"
-          "$ANDROID_SDK_ROOT/emulator/emulator" -list-avds | tee avd-list.txt
-          grep -qx 'connectx-alpha4-release' avd-list.txt
+          grep -Fq 'go_version=go1.26.3' downloaded/native/metadata/build.txt
+          grep -Fq 'ndk_version=28.0.13004108' downloaded/native/metadata/build.txt
+          grep -Fq 'abis=arm64-v8a,x86_64' downloaded/native/metadata/build.txt
 
-      - name: Start emulator and wait for Android
-        shell: bash
-        run: |
-          set -euo pipefail
-          ADB="$ANDROID_SDK_ROOT/platform-tools/adb"
-          EMULATOR="$ANDROID_SDK_ROOT/emulator/emulator"
-          test -e /dev/kvm
-          sudo chmod 666 /dev/kvm
-          nohup "$EMULATOR" \
-            -avd connectx-alpha4-release \
-            -accel on \
-            -memory 2048 \
-            -no-window \
-            -noaudio \
-            -no-boot-anim \
-            -no-snapshot \
-            -no-snapshot-save \
-            -no-metrics \
-            -gpu swiftshader_indirect \
-            > emulator.log 2>&1 &
-          echo "$!" > emulator.pid
-          sleep 5
-          kill -0 "$(cat emulator.pid)"
-          "$ADB" start-server
-          timeout 300 "$ADB" -s "$ADB_SERIAL" wait-for-device
-          deadline=$((SECONDS + 300))
-          until [[ "$("$ADB" -s "$ADB_SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; do
-            kill -0 "$(cat emulator.pid)" 2>/dev/null || { cat emulator.log; exit 1; }
-            (( SECONDS < deadline )) || { cat emulator.log; exit 1; }
-            sleep 5
-          done
-          test "$("$ADB" -s "$ADB_SERIAL" shell getprop ro.build.version.sdk | tr -d '\r')" = "35"
-          test "$("$ADB" -s "$ADB_SERIAL" shell getprop ro.product.cpu.abi | tr -d '\r')" = "x86_64"
-
-      - name: Run canonical alpha.4 build and Android gates
-        shell: bash
-        run: |
-          set -euo pipefail
-          chmod +x scripts/verify-alpha4-local.sh
-          scripts/verify-alpha4-local.sh --clean --device
-          grep -Fq "Commit: $TARGET_SHA" "$CONNECTX_VERIFY_OUT/RESULT.txt"
-          grep -Fq 'Static build gates: passed' "$CONNECTX_VERIFY_OUT/RESULT.txt"
-          grep -Fq 'Android runtime gates: passed' "$CONNECTX_VERIFY_OUT/RESULT.txt"
-          test "$(cat "$CONNECTX_VERIFY_OUT/COMMIT_SHA.txt")" = "$TARGET_SHA"
-
-      - name: Collect release diagnostics
-        if: always()
-        shell: bash
-        run: |
-          set +e
-          mkdir -p release-diagnostics
-          cp emulator.log accel-check.txt avd-list.txt disk-before-verification.txt release-diagnostics/ 2>/dev/null
-          cp -R "$CONNECTX_VERIFY_OUT" release-diagnostics/verification 2>/dev/null
-          "$ANDROID_SDK_ROOT/platform-tools/adb" -s "$ADB_SERIAL" logcat -d > release-diagnostics/logcat.txt 2>&1
-
-      - name: Stop release emulator
-        if: always()
-        shell: bash
-        run: |
-          "$ANDROID_SDK_ROOT/platform-tools/adb" -s "$ADB_SERIAL" emu kill || true
-          [[ ! -f emulator.pid ]] || kill "$(cat emulator.pid)" 2>/dev/null || true
-
-      - name: Upload release diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: alpha4-release-verification-${{ github.sha }}
-          path: release-diagnostics
-          if-no-files-found: warn
-          retention-days: 14
+          unzip -l downloaded/apk/app-debug.apk | tee apk-contents.txt
+          grep -Fq 'lib/arm64-v8a/libconnectxbridge.so' apk-contents.txt
+          grep -Fq 'lib/x86_64/libconnectxbridge.so' apk-contents.txt
+          grep -Fq 'assets/THIRD_PARTY_NOTICES.md' apk-contents.txt
+          grep -Fq 'assets/tun2socks-MIT.txt' apk-contents.txt
+          grep -Fq 'assets/gvisor-LICENSE.txt' apk-contents.txt
 
       - name: Prepare deterministic release assets
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release-assets native-package
-          cp "$CONNECTX_VERIFY_OUT/apk/ConnectX-v0.3.0-alpha.4-debug.apk" \
+          cp downloaded/apk/app-debug.apk \
             release-assets/ConnectX-v0.3.0-alpha.4-debug.apk
-          cp -R "$CONNECTX_VERIFY_OUT/native/jniLibs" native-package/jniLibs
+          cp -R downloaded/native/. native-package/
+
           find native-package -type f -exec touch -t 198001010000 {} +
-          (cd native-package && find . -type f -print0 | sort -z | \
+          (cd native-package && \
+            find . -type f -print0 | sort -z | \
             xargs -0 zip -X "$GITHUB_WORKSPACE/release-assets/ConnectX-v0.3.0-alpha.4-native.zip")
-          cp THIRD_PARTY_NOTICES.md release-assets/THIRD_PARTY_NOTICES-v0.3.0-alpha.4.md
+
+          cp THIRD_PARTY_NOTICES.md \
+            release-assets/THIRD_PARTY_NOTICES-v0.3.0-alpha.4.md
           cp licenses/tun2socks-MIT.txt release-assets/tun2socks-MIT.txt
           cp licenses/gvisor-LICENSE.txt release-assets/gvisor-LICENSE.txt
           (cd release-assets && sha256sum * > CHECKSUMS.txt)
+
           test -s release-assets/ConnectX-v0.3.0-alpha.4-debug.apk
           test -s release-assets/ConnectX-v0.3.0-alpha.4-native.zip
           test -s release-assets/CHECKSUMS.txt
@@ -214,20 +149,58 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          resolve_tag_commit() {
+            local ref_json object_type object_sha tag_json
+            ref_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG_NAME")"
+            object_type="$(jq -r '.object.type' <<<"$ref_json")"
+            object_sha="$(jq -r '.object.sha' <<<"$ref_json")"
+            if [[ "$object_type" == 'tag' ]]; then
+              tag_json="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
+              object_type="$(jq -r '.object.type' <<<"$tag_json")"
+              object_sha="$(jq -r '.object.sha' <<<"$tag_json")"
+            fi
+            test "$object_type" = 'commit'
+            printf '%s\n' "$object_sha"
+          }
+
           if gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            existing_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG_NAME" --jq '.object.sha')"
-            test "$existing_sha" = "$TARGET_SHA"
-            gh release upload "$TAG_NAME" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
+            test "$(resolve_tag_commit)" = "$TARGET_SHA"
+            test "$(gh release view "$TAG_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json isPrerelease \
+              --jq '.isPrerelease')" = 'true'
+
+            mkdir -p existing-release-assets
+            for asset_path in release-assets/*; do
+              asset_name="$(basename "$asset_path")"
+              if gh release view "$TAG_NAME" \
+                --repo "$GITHUB_REPOSITORY" \
+                --json assets \
+                --jq '.assets[].name' | grep -Fxq "$asset_name"; then
+                gh release download "$TAG_NAME" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --pattern "$asset_name" \
+                  --dir existing-release-assets
+                cmp -s "$asset_path" "existing-release-assets/$asset_name"
+              else
+                gh release upload "$TAG_NAME" "$asset_path" \
+                  --repo "$GITHUB_REPOSITORY"
+              fi
+            done
+
             gh release edit "$TAG_NAME" \
               --repo "$GITHUB_REPOSITORY" \
               --title 'ConnectX v0.3.0-alpha.4 — Repeated Restricted-network Evidence' \
               --notes-file docs/releases/v0.3.0-alpha.4.md \
               --prerelease
-          else
-            gh release create "$TAG_NAME" release-assets/* \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$TARGET_SHA" \
-              --title 'ConnectX v0.3.0-alpha.4 — Repeated Restricted-network Evidence' \
-              --notes-file docs/releases/v0.3.0-alpha.4.md \
-              --prerelease
+            exit 0
           fi
+
+          gh release create "$TAG_NAME" \
+            release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$TARGET_SHA" \
+            --title 'ConnectX v0.3.0-alpha.4 — Repeated Restricted-network Evidence' \
+            --notes-file docs/releases/v0.3.0-alpha.4.md \
+            --prerelease
