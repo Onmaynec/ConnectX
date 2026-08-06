@@ -133,7 +133,7 @@ func Start(
 		return CodeProxyInit, fmt.Errorf("create SOCKS5 proxy: %w", err)
 	}
 
-	dev, err := openSingleProcessorTun(tunFD, uint32(mtu))
+	dev, err := openChannelTun(tunFD, uint32(mtu))
 	if err != nil {
 		return CodeDeviceInit, fmt.Errorf("open TUN fd: %w", err)
 	}
@@ -206,10 +206,9 @@ func Stop() error {
 		return nil
 	}
 
-	// Stop proxy-side work first, then explicitly remove the NIC while its TUN
-	// descriptor is still open. The pinned gVisor fdbased LinkEndpoint.Close is
-	// a no-op; RemoveNIC is what calls Attach(nil), signals each stopfd, waits
-	// for dispatch loops, and releases per-processor resources.
+	// Stop proxy-side work first and detach the pure-Go channel endpoint while
+	// the owned TUN workers are still alive. RemoveNIC prevents further packet
+	// delivery without allocating or depending on gVisor kernel poller state.
 	session.flows.requestCloseAll()
 	var detachError error
 	if session.stack.HasNIC(session.nicID) {
@@ -218,8 +217,8 @@ func Stop() error {
 		}
 	}
 
-	// The endpoint no longer reads from the transferred descriptor after
-	// RemoveNIC returns, so ownership can now be released safely.
+	// channelTun cancellation stops both bounded workers before the numeric TUN
+	// descriptor is closed, preventing FD reuse races during teardown.
 	session.device.Close()
 	session.stack.Close()
 	session.stack.Wait()
