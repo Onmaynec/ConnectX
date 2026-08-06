@@ -46,7 +46,7 @@ jobs:
             scripts/verify-alpha7-local.sh \
             scripts/collect-alpha7-physical-evidence.sh \
             scripts/validate_device_evidence_bundle.py
-          git rm \
+          git rm -f \
             .github/workflows/apply-alpha7-physical-evidence.yml \
             scripts/apply_alpha7.py
           git config user.name "github-actions[bot]"
