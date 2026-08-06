@@ -70,9 +70,11 @@ func (t *flowTracker) waitEmpty(timeout time.Duration) bool {
 }
 
 type trackedDialer struct {
-	delegate proxy.Dialer
+	delegate proxy.Proxy
 	tracker  *flowTracker
 }
+
+var _ proxy.Proxy = (*trackedDialer)(nil)
 
 func (d *trackedDialer) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {
 	conn, err := d.delegate.DialContext(ctx, metadata)
