@@ -1,29 +1,35 @@
-name: Agent source export
+name: Apply ConnectX alpha.4 change set
 
 on:
-  pull_request:
+  push:
     branches:
-      - main
+      - feature/v0.3.0-alpha4
     paths:
-      - .github/workflows/agent-source-export.yml
+      - docs/ops/alpha4.patch.gz.b64
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  export:
+  apply:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - name: Archive source tree
+      - name: Checkout alpha.4 branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/v0.3.0-alpha4
+          fetch-depth: 0
+
+      - name: Apply reviewed alpha.4 patch
         shell: bash
         run: |
           set -euo pipefail
-          git archive --format=zip --output=connectx-source.zip HEAD
-      - uses: actions/upload-artifact@v4
-        with:
-          name: connectx-alpha4-source-${{ github.sha }}
-          path: connectx-source.zip
-          if-no-files-found: error
-          retention-days: 1
+          base64 --decode docs/ops/alpha4.patch.gz.b64 | gzip --decompress > "$RUNNER_TEMP/alpha4.patch"
+          git apply --check "$RUNNER_TEMP/alpha4.patch"
+          git apply "$RUNNER_TEMP/alpha4.patch"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: implement ConnectX v0.3.0-alpha.4"
+          git push origin HEAD:feature/v0.3.0-alpha4
