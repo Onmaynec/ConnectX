@@ -10,6 +10,32 @@ All notable changes to ConnectX are documented in this file.
 - Physical-device repeated TUN lifecycle verification.
 - First strategy verified on a reproducible restricted network.
 
+## [0.3.0-alpha.6]
+
+### Added
+
+- Pure Kotlin evidence assessor for repeated BASELINE/STRATEGY/RECOVERY samples.
+- Explicit evidence classes, confidence levels and safe recommendations.
+- Redacted report schema v2 with deterministic 24-hex report IDs.
+- Allow-list report validation for known fields, redacted target data and bounded output.
+- Compose result lines explaining evidence quality and the next safe manual action.
+- Unit tests for restricted-network evidence, ordinary availability, regression, incomplete samples, deterministic IDs and unsafe report mutations.
+- Application version `0.3.0-alpha.6`, versionCode `13`.
+- Native bridge version `connectx-go-bridge/0.3.0-alpha.6`.
+
+### Changed
+
+- A positive strategy phase is no longer presented only as a raw decision/reason pair; sample consistency now determines evidence class and confidence.
+- Shared reports can be deduplicated by aggregate result without including hostname, IPv4 or network identifiers.
+
+### Safety boundaries
+
+- Strategy activation remains manual and lab-only.
+- TUN capture remains limited to TEST-NET-1 (`192.0.2.0/24`).
+- Ordinary application traffic is not routed or modified.
+- No HTTP, account login, token, cookie, response body, MITM or HTTPS decryption is introduced.
+- Real restricted-network and physical-device validation remains required before closing #11.
+
 ## [0.3.0-alpha.5]
 
 ### Added

@@ -23,7 +23,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import dev.connectx.strategy.api.ExternalTlsEvidenceAssessor
+import dev.connectx.strategy.api.ExternalTlsEvidenceClass
+import dev.connectx.strategy.api.ExternalTlsEvidenceConfidence
 import dev.connectx.strategy.api.ExternalTlsEvidencePreset
+import dev.connectx.strategy.api.ExternalTlsEvidenceRecommendation
+import dev.connectx.strategy.api.ExternalTlsEvidenceSampleSummary
 
 enum class ExternalTlsEvidenceStatus {
     IDLE,
@@ -206,7 +211,7 @@ fun ExternalTlsEvidencePanel(
                 }
 
                 Text(
-                    text = "Alpha.5 выполняет по три попытки baseline, TLS split и recovery. " +
+                    text = "Alpha.6 выполняет по три попытки baseline, TLS split и recovery, классифицирует доказательность и проверяет отчёт по allow-list schema. " +
                         "Она не отправляет HTTP, не входит в аккаунт, не читает тело ответа и " +
                         "не расшифровывает HTTPS. Результат относится только к текущей сети.",
                     style = MaterialTheme.typography.bodySmall,
@@ -271,9 +276,61 @@ private fun resultLines(state: ExternalTlsEvidenceUiState): List<String> = listO
     phaseLine("Baseline", state.baselineLatencyMillis, state.baselineRecordKind, state.baselineSuccesses, state.baselineFailures),
     phaseLine("Strategy", state.strategyLatencyMillis, state.strategyRecordKind, state.strategySuccesses, state.strategyFailures),
     phaseLine("Recovery", state.recoveryLatencyMillis, state.recoveryRecordKind, state.recoverySuccesses, state.recoveryFailures),
+    evidenceAssessmentLine(state),
+    evidenceRecommendationLine(state),
     state.reason?.let { "Reason: $it" },
     state.gateState?.let { "Session gate: $it" },
 )
+
+private fun evidenceAssessmentLine(state: ExternalTlsEvidenceUiState): String {
+    val assessment = ExternalTlsEvidenceAssessor.assess(state.toEvidenceSummary())
+    val classText = when (assessment.evidenceClass) {
+        ExternalTlsEvidenceClass.STRATEGY_HELP_CONFIRMED ->
+            "помощь стратегии подтверждена текущей серией"
+        ExternalTlsEvidenceClass.AVAILABLE_WITHOUT_STRATEGY ->
+            "цель доступна без стратегии"
+        ExternalTlsEvidenceClass.STRATEGY_NOT_HELPFUL ->
+            "стратегия не помогла или ухудшила результат"
+        ExternalTlsEvidenceClass.INCONCLUSIVE ->
+            "данных недостаточно для вывода"
+    }
+    val confidenceText = when (assessment.confidence) {
+        ExternalTlsEvidenceConfidence.HIGH -> "высокая"
+        ExternalTlsEvidenceConfidence.MEDIUM -> "средняя"
+        ExternalTlsEvidenceConfidence.LOW -> "низкая"
+    }
+    return "Доказательность: $classText · уверенность $confidenceText"
+}
+
+private fun evidenceRecommendationLine(state: ExternalTlsEvidenceUiState): String {
+    val recommendation = ExternalTlsEvidenceAssessor
+        .assess(state.toEvidenceSummary())
+        .recommendation
+    val text = when (recommendation) {
+        ExternalTlsEvidenceRecommendation.ATTACH_FOR_MANUAL_REVIEW ->
+            "сохранить обезличенный отчёт и повторить на том же устройстве"
+        ExternalTlsEvidenceRecommendation.STRATEGY_NOT_REQUIRED ->
+            "не включать стратегию: baseline уже доступен"
+        ExternalTlsEvidenceRecommendation.KEEP_STRATEGY_DISABLED ->
+            "оставить стратегию выключенной"
+        ExternalTlsEvidenceRecommendation.REPEAT_ON_SAME_NETWORK ->
+            "повторить полную 3×A/B/A-проверку без смены сети"
+    }
+    return "Следующий шаг: $text"
+}
+
+private fun ExternalTlsEvidenceUiState.toEvidenceSummary() =
+    ExternalTlsEvidenceSampleSummary(
+        samplesPerPhase = 3,
+        baselineSuccesses = baselineSuccesses,
+        baselineFailures = baselineFailures,
+        strategySuccesses = strategySuccesses,
+        strategyFailures = strategyFailures,
+        recoverySuccesses = recoverySuccesses,
+        recoveryFailures = recoveryFailures,
+        decision = decision,
+        reason = reason,
+    )
 
 private fun phaseLine(
     name: String,

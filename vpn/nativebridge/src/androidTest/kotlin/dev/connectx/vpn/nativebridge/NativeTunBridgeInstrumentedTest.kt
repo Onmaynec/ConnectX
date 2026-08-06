@@ -21,7 +21,7 @@ class NativeTunBridgeInstrumentedTest {
 
             assertTrue(
                 report.version,
-                report.version.startsWith("connectx-go-bridge/0.3.0-alpha.5"),
+                report.version.startsWith("connectx-go-bridge/0.3.0-alpha.6"),
             )
             assertTrue(
                 report.version,

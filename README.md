@@ -10,9 +10,9 @@ ConnectX не является сервисом удалённого VPN и не
 
 ConnectX не выполняет MITM, не расшифровывает HTTPS, не устанавливает пользовательские сертификаты и не записывает содержимое трафика.
 
-## Текущая версия разработки: v0.3.0-alpha.5
+## Текущая версия разработки: v0.3.0-alpha.6
 
-Alpha.5 сохраняет повторяемую TLS A/B/A-проверку alpha.4 и переводит выпуск prerelease на единый exact-commit pipeline. Версия приложения, native bridge, README, changelog и release manifest теперь проверяются одной автоматической guard-процедурой.
+Alpha.6 сохраняет repeated TLS A/B/A-проверку и добавляет Evidence Quality Gate: результат получает формальный evidence class, уровень уверенности, безопасную рекомендацию и детерминированный report ID. Перед отправкой обезличенный отчёт проверяется по allow-list schema v2.
 
 ### Проверка TLS-стратегии
 
@@ -39,7 +39,7 @@ Evaluator требует минимум два успеха и допускае�
 - ограничение baseline не воспроизвелось;
 - данных недостаточно.
 
-В интерфейсе показываются success/failure counters, median latency, TLS record kind, decision и reason. Обезличенный отчёт не содержит hostname, IPv4, payload, credentials или raw error text.
+В интерфейсе показываются success/failure counters, median latency, TLS record kind, decision, reason, evidence class, confidence и безопасный следующий шаг. Обезличенный отчёт schema v2 не получает hostname, IPv4, payload, credentials или raw error text; неизвестные поля, URL и credential-like fragments отклоняются до share intent. Детерминированный `report_id` позволяет сравнить два одинаковых агрегированных результата без сетевого идентификатора.
 
 ### Единый guarded prerelease
 
@@ -91,16 +91,16 @@ gradle --no-daemon lintDebug
 gradle --no-daemon :app:assembleDebug
 ```
 
-Полная локальная проверка alpha.5:
+Полная локальная проверка alpha.6:
 
 ```bash
-scripts/verify-alpha5-local.sh --clean
+scripts/verify-alpha6-local.sh --clean
 ```
 
 Для Android runtime gates нужен уже запущенный Android 35 x86_64 emulator:
 
 ```bash
-scripts/verify-alpha5-local.sh --clean --device
+scripts/verify-alpha6-local.sh --clean --device
 ```
 
 Native bridge собирается скриптом:
@@ -144,4 +144,4 @@ GitHub Actions выполняет изолированные gates:
 
 ## Статус релиза
 
-`v0.3.0-alpha.5` публикуется только после полного Android CI на exact `main` commit. Отдельные version-specific publisher workflows больше не используются: release activation, provenance verification и идемпотентная публикация выполняются общим guarded workflow.
+`v0.3.0-alpha.6` публикуется только после полного Android CI на exact `main` commit. Отдельные version-specific publisher workflows больше не используются: release activation, provenance verification и идемпотентная публикация выполняются общим guarded workflow.
