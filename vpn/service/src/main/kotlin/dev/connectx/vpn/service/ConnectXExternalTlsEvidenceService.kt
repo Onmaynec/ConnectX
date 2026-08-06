@@ -360,7 +360,7 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
     }
 
     private fun establishTestTunnel(): ParcelFileDescriptor = Builder()
-        .setSession("ConnectX v0.3 alpha.5 TLS evidence")
+        .setSession("ConnectX v0.3 alpha.6 TLS evidence")
         .setMtu(DEFAULT_MTU)
         .addAddress(LOCAL_TUN_ADDRESS, LOCAL_TUN_PREFIX)
         .addRoute(TEST_ROUTE, TEST_ROUTE_PREFIX)
