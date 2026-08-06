@@ -39,6 +39,7 @@ data class StrategyEvaluationPolicy(
     val maxLatencyRegressionPercent: Int = 50,
     val maxAbsoluteLatencyRegressionMillis: Long = 100L,
     val cooldownMillis: Long = 60_000L,
+    val allowRestrictedBaseline: Boolean = false,
 ) {
     init {
         require(requiredSuccessesPerPhase in 1..100) {
@@ -111,6 +112,9 @@ enum class StrategyEvaluationReason {
     STRATEGY_LATENCY_REGRESSION,
     RECOVERY_FAILURE_BUDGET_EXCEEDED,
     RECOVERY_SAMPLES_INSUFFICIENT,
+    STRATEGY_RESTORED_RESTRICTED_BASELINE,
+    RESTRICTED_BASELINE_NOT_REPRODUCED,
+    STRATEGY_DID_NOT_RESTORE_RESTRICTED_BASELINE,
 }
 
 data class StrategyEvaluationReport internal constructor(
@@ -160,6 +164,12 @@ data class StrategyEvaluationReport internal constructor(
                 StrategyEvaluationDecision.REJECT_ENVIRONMENT_UNSTABLE
             StrategyEvaluationReason.RECOVERY_SAMPLES_INSUFFICIENT ->
                 StrategyEvaluationDecision.INCONCLUSIVE
+            StrategyEvaluationReason.STRATEGY_RESTORED_RESTRICTED_BASELINE ->
+                StrategyEvaluationDecision.KEEP_FOR_LAB_SESSION
+            StrategyEvaluationReason.RESTRICTED_BASELINE_NOT_REPRODUCED ->
+                StrategyEvaluationDecision.REJECT_ENVIRONMENT_UNSTABLE
+            StrategyEvaluationReason.STRATEGY_DID_NOT_RESTORE_RESTRICTED_BASELINE ->
+                StrategyEvaluationDecision.ROLLBACK_CONFIRMED
         }
         require(decision == expectedDecision) {
             "Decision $decision is incompatible with reason $reason"
@@ -190,6 +200,16 @@ class StrategyHealthEvaluator(
         val baseline = summarize(StrategyHealthPhase.BASELINE, baselineSamples)
         val strategy = summarize(StrategyHealthPhase.STRATEGY, strategySamples)
         val recovery = summarize(StrategyHealthPhase.RECOVERY, recoverySamples)
+
+        if (policy.allowRestrictedBaseline) {
+            val restrictedBaselineReport = evaluateRestrictedBaseline(
+                strategyId = strategyId,
+                baseline = baseline,
+                strategy = strategy,
+                recovery = recovery,
+            )
+            if (restrictedBaselineReport != null) return restrictedBaselineReport
+        }
 
         if (baseline.failures > policy.maxFailuresPerPhase) {
             return report(
@@ -293,6 +313,82 @@ class StrategyHealthEvaluator(
             )
         }
     }
+
+    private fun evaluateRestrictedBaseline(
+        strategyId: StrategyId,
+        baseline: StrategyPhaseSummary,
+        strategy: StrategyPhaseSummary,
+        recovery: StrategyPhaseSummary,
+    ): StrategyEvaluationReport? {
+        if (isHealthy(baseline)) return null
+
+        if (!isConsistentlyUnhealthy(baseline)) {
+            return report(
+                strategyId = strategyId,
+                baseline = baseline,
+                strategy = strategy,
+                recovery = recovery,
+                decision = StrategyEvaluationDecision.INCONCLUSIVE,
+                reason = StrategyEvaluationReason.BASELINE_SAMPLES_INSUFFICIENT,
+            )
+        }
+
+        if (isHealthy(recovery)) {
+            return report(
+                strategyId = strategyId,
+                baseline = baseline,
+                strategy = strategy,
+                recovery = recovery,
+                decision = StrategyEvaluationDecision.REJECT_ENVIRONMENT_UNSTABLE,
+                reason = StrategyEvaluationReason.RESTRICTED_BASELINE_NOT_REPRODUCED,
+            )
+        }
+        if (!isConsistentlyUnhealthy(recovery)) {
+            return report(
+                strategyId = strategyId,
+                baseline = baseline,
+                strategy = strategy,
+                recovery = recovery,
+                decision = StrategyEvaluationDecision.INCONCLUSIVE,
+                reason = StrategyEvaluationReason.RECOVERY_SAMPLES_INSUFFICIENT,
+            )
+        }
+
+        return when {
+            isHealthy(strategy) -> report(
+                strategyId = strategyId,
+                baseline = baseline,
+                strategy = strategy,
+                recovery = recovery,
+                decision = StrategyEvaluationDecision.KEEP_FOR_LAB_SESSION,
+                reason = StrategyEvaluationReason.STRATEGY_RESTORED_RESTRICTED_BASELINE,
+            )
+            isConsistentlyUnhealthy(strategy) -> report(
+                strategyId = strategyId,
+                baseline = baseline,
+                strategy = strategy,
+                recovery = recovery,
+                decision = StrategyEvaluationDecision.ROLLBACK_CONFIRMED,
+                reason = StrategyEvaluationReason.STRATEGY_DID_NOT_RESTORE_RESTRICTED_BASELINE,
+            )
+            else -> report(
+                strategyId = strategyId,
+                baseline = baseline,
+                strategy = strategy,
+                recovery = recovery,
+                decision = StrategyEvaluationDecision.INCONCLUSIVE,
+                reason = StrategyEvaluationReason.STRATEGY_SAMPLES_INSUFFICIENT,
+            )
+        }
+    }
+
+    private fun isHealthy(summary: StrategyPhaseSummary): Boolean =
+        summary.successes >= policy.requiredSuccessesPerPhase &&
+            summary.failures <= policy.maxFailuresPerPhase
+
+    private fun isConsistentlyUnhealthy(summary: StrategyPhaseSummary): Boolean =
+        summary.failures > policy.maxFailuresPerPhase &&
+            summary.successes < policy.requiredSuccessesPerPhase
 
     private fun summarize(
         phase: StrategyHealthPhase,

@@ -182,6 +182,30 @@ class ExternalTlsEvidenceInstrumentedTest {
             result.getStringExtra(TunnelContract.EXTRA_STRATEGY_GATE_STATE),
         )
         assertEquals(
+            3,
+            result.getIntExtra(TunnelContract.EXTRA_EVIDENCE_BASELINE_SUCCESSES, 0),
+        )
+        assertEquals(
+            0,
+            result.getIntExtra(TunnelContract.EXTRA_EVIDENCE_BASELINE_FAILURES, -1),
+        )
+        assertEquals(
+            3,
+            result.getIntExtra(TunnelContract.EXTRA_EVIDENCE_STRATEGY_SUCCESSES, 0),
+        )
+        assertEquals(
+            0,
+            result.getIntExtra(TunnelContract.EXTRA_EVIDENCE_STRATEGY_FAILURES, -1),
+        )
+        assertEquals(
+            3,
+            result.getIntExtra(TunnelContract.EXTRA_EVIDENCE_RECOVERY_SUCCESSES, 0),
+        )
+        assertEquals(
+            0,
+            result.getIntExtra(TunnelContract.EXTRA_EVIDENCE_RECOVERY_FAILURES, -1),
+        )
+        assertEquals(
             TlsRecordKind.ALERT.name,
             result.getStringExtra(TunnelContract.EXTRA_EVIDENCE_BASELINE_RECORD_KIND),
         )
@@ -291,8 +315,8 @@ class ExternalTlsEvidenceInstrumentedTest {
         const val TEST_HOSTNAME = "example.org"
         const val TEST_PUBLIC_IPV4 = "93.184.216.34"
         const val EXPECTED_SPLIT_OFFSET = 43
-        const val CONNECTIONS_PER_SESSION = 3L
+        const val CONNECTIONS_PER_SESSION = 9L
         const val TLS_HEADER_BYTES = 5L
-        const val PROBE_TIMEOUT_SECONDS = 60L
+        const val PROBE_TIMEOUT_SECONDS = 90L
     }
 }

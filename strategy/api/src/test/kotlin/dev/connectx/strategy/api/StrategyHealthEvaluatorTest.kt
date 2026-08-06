@@ -364,6 +364,127 @@ class StrategyHealthEvaluatorTest {
         assertTrue(StrategyEvaluationPolicy().cooldownMillis > 0L)
     }
 
+    @Test
+    fun restrictedBaselineRestoredOnlyByStrategyIsApproved() {
+        val report = evaluator(
+            StrategyEvaluationPolicy(
+                requiredSuccessesPerPhase = 2,
+                maxFailuresPerPhase = 1,
+                allowRestrictedBaseline = true,
+            ),
+        ).evaluate(
+            strategyId = strategyId,
+            baselineSamples = failures(
+                StrategySampleFailure.TIMEOUT,
+                StrategySampleFailure.TIMEOUT,
+                StrategySampleFailure.CONNECTION_FAILED,
+            ),
+            strategySamples = successes(30L, 40L, 35L),
+            recoverySamples = failures(
+                StrategySampleFailure.TIMEOUT,
+                StrategySampleFailure.CONNECTION_FAILED,
+                StrategySampleFailure.TIMEOUT,
+            ),
+        )
+
+        assertEquals(StrategyEvaluationDecision.KEEP_FOR_LAB_SESSION, report.decision)
+        assertEquals(
+            StrategyEvaluationReason.STRATEGY_RESTORED_RESTRICTED_BASELINE,
+            report.reason,
+        )
+        assertNull(report.latencyDeltaMillis)
+    }
+
+    @Test
+    fun recoveredBaselineAfterStrategyMarksEnvironmentUnstable() {
+        val report = evaluator(
+            StrategyEvaluationPolicy(
+                requiredSuccessesPerPhase = 2,
+                maxFailuresPerPhase = 1,
+                allowRestrictedBaseline = true,
+            ),
+        ).evaluate(
+            strategyId = strategyId,
+            baselineSamples = failures(
+                StrategySampleFailure.TIMEOUT,
+                StrategySampleFailure.TIMEOUT,
+                StrategySampleFailure.CONNECTION_FAILED,
+            ),
+            strategySamples = successes(30L, 35L, 40L),
+            recoverySamples = successes(25L, 30L, 35L),
+        )
+
+        assertEquals(StrategyEvaluationDecision.REJECT_ENVIRONMENT_UNSTABLE, report.decision)
+        assertEquals(
+            StrategyEvaluationReason.RESTRICTED_BASELINE_NOT_REPRODUCED,
+            report.reason,
+        )
+    }
+
+    @Test
+    fun healthyRecoveryOutranksFailedStrategyForRestrictedBaseline() {
+        val report = evaluator(
+            StrategyEvaluationPolicy(
+                requiredSuccessesPerPhase = 2,
+                maxFailuresPerPhase = 1,
+                allowRestrictedBaseline = true,
+            ),
+        ).evaluate(
+            strategyId = strategyId,
+            baselineSamples = failures(
+                StrategySampleFailure.TIMEOUT,
+                StrategySampleFailure.CONNECTION_FAILED,
+                StrategySampleFailure.TIMEOUT,
+            ),
+            strategySamples = failures(
+                StrategySampleFailure.TIMEOUT,
+                StrategySampleFailure.CONNECTION_FAILED,
+                StrategySampleFailure.TIMEOUT,
+            ),
+            recoverySamples = successes(20L, 25L, 30L),
+        )
+
+        assertEquals(StrategyEvaluationDecision.REJECT_ENVIRONMENT_UNSTABLE, report.decision)
+        assertEquals(
+            StrategyEvaluationReason.RESTRICTED_BASELINE_NOT_REPRODUCED,
+            report.reason,
+        )
+    }
+
+    @Test
+    fun strategyThatDoesNotRestoreRestrictedBaselineRollsBack() {
+        val report = evaluator(
+            StrategyEvaluationPolicy(
+                requiredSuccessesPerPhase = 2,
+                maxFailuresPerPhase = 1,
+                allowRestrictedBaseline = true,
+            ),
+        ).evaluate(
+            strategyId = strategyId,
+            baselineSamples = failures(
+                StrategySampleFailure.TIMEOUT,
+                StrategySampleFailure.TIMEOUT,
+            ),
+            strategySamples = failures(
+                StrategySampleFailure.TIMEOUT,
+                StrategySampleFailure.CONNECTION_FAILED,
+            ),
+            recoverySamples = failures(
+                StrategySampleFailure.TIMEOUT,
+                StrategySampleFailure.TIMEOUT,
+            ),
+        )
+
+        assertEquals(StrategyEvaluationDecision.ROLLBACK_CONFIRMED, report.decision)
+        assertEquals(
+            StrategyEvaluationReason.STRATEGY_DID_NOT_RESTORE_RESTRICTED_BASELINE,
+            report.reason,
+        )
+    }
+
+    private fun failures(vararg reasons: StrategySampleFailure): List<StrategyHealthSample> =
+        reasons.map { StrategyHealthSample.Failure(it) }
+
     private fun evaluator(
         policy: StrategyEvaluationPolicy = StrategyEvaluationPolicy(),
     ) = StrategyHealthEvaluator(policy)

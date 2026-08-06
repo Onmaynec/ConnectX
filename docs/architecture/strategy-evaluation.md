@@ -2,106 +2,89 @@
 
 ## Purpose
 
-`v0.3.0-alpha.2` adds a bounded health gate around the first lab-only strategy. It answers a narrower question than “does this bypass DPI?”:
+`v0.3.0-alpha.4` extends the bounded strategy evaluator so it can classify both healthy and reproducibly restricted baselines. It answers two narrow questions:
 
-> Does the strategy preserve byte integrity and complete the same local TEST-NET path without unacceptable errors or latency regression, while the baseline and recovery paths remain healthy?
+1. when baseline is healthy, does TLS split preserve the same path without excessive failures or latency;
+2. when baseline is repeatedly unavailable, does TLS split restore the TLS response and does recovery reproduce the unavailable baseline.
 
-The answer is used only for the current explicit Lab session. It is not persisted as proof that a strategy works on an ISP, mobile carrier, Wi-Fi network, domain, application, or country.
+The answer applies only to the current explicit Lab session, selected public hostname and current network. It is not persisted as universal evidence for an ISP, country, application or device.
 
-## A/B/A sequence
+## Repeated A/B/A sequence
+
+The external evidence service opens nine fresh TCP connections:
 
 ```text
-A — BASELINE
-  synthetic TLS ClientHello
+A — BASELINE × 3
+  generated ClientHello
   → one SocketOutputStream.write()
-  → 192.0.2.1:18444
-  → Android TEST-NET TUN
-  → native userspace stack
-  → authenticated loopback SOCKS5 relay
-  → loopback echo endpoint
 
-B — STRATEGY
-  same synthetic TLS ClientHello
-  → tls-clienthello-split-v1 plan
-  → two ordered write() calls with bounded gap
-  → same TEST-NET path and endpoint
+B — STRATEGY × 3
+  same ClientHello
+  → tls-clienthello-split-v1
+  → two ordered write() calls with a bounded gap
 
-A — RECOVERY
-  same synthetic TLS ClientHello
-  → one write()
-  → same TEST-NET path and endpoint
+A — RECOVERY × 3
+  same ClientHello
+  → one SocketOutputStream.write()
 ```
 
-Every phase uses a separate TCP connection. The service verifies that the echoed payload is byte-for-byte identical to the original synthetic ClientHello and waits for the relay to confirm one new connection and the expected byte deltas.
+Every connection uses the TEST-NET-only Android TUN, native userspace stack and authenticated local SOCKS5 relay. The relay rewrites only `192.0.2.1:18445` to one DNS-pinned public IPv4 on TCP/443 and protects its outbound socket with `VpnService.protect()`.
 
-Two Java/Kotlin `write()` calls are not claimed to be two TCP packets on the wire. Kernel and userspace buffering may coalesce writes.
+Two Java/Kotlin `write()` calls are not claimed to be two TCP packets. Kernel and userspace buffering may coalesce them.
 
 ## Evaluation input
 
-The pure Kotlin evaluator receives only bounded, privacy-safe samples:
+The pure Kotlin evaluator receives only bounded samples:
 
 - phase name;
 - success latency in milliseconds; or
 - a typed failure reason.
 
-It never receives packet payloads, host names, URLs, credentials, DNS names, user identifiers, or wall-clock timestamps.
+It never receives packet payloads, hostnames, URLs, credentials, DNS names, user identifiers or wall-clock timestamps. Each phase is capped at 100 samples by the API; alpha.4 submits exactly three.
 
-Failure reasons are:
+Failure reasons are `TIMEOUT`, `CONNECTION_FAILED`, `PAYLOAD_MISMATCH`, `STRATEGY_REFUSED`, `CANCELLED` and `INTERNAL_ERROR`.
 
-- `TIMEOUT`;
-- `CONNECTION_FAILED`;
-- `PAYLOAD_MISMATCH`;
-- `STRATEGY_REFUSED`;
-- `CANCELLED`;
-- `INTERNAL_ERROR`.
+## Alpha.4 policy
 
-Each phase is capped at 100 samples by the API. The alpha.2 Android Lab currently submits one sample per phase.
-
-## Policy
-
-The Android Lab policy is intentionally conservative and fixed in code:
-
-- required successes per phase: `1`;
-- maximum failures per phase: `0`;
+- required successes per phase: `2`;
+- maximum failures per phase: `1`;
 - maximum relative latency regression: `50%`;
-- minimum absolute regression budget: `100 ms`;
-- cooldown after rollback, rejection, interruption, or setup failure: `60 seconds`.
+- minimum absolute regression budget: `250 ms`;
+- cooldown after rollback, rejection, interruption or setup failure: `60 seconds`;
+- restricted-baseline classification: enabled only for the explicit external evidence service.
 
-The allowed strategy latency is:
+For a healthy baseline the allowed strategy latency is:
 
 ```text
 baseline median + max(
   ceil(baseline median × 50%),
-  100 ms
+  250 ms
 )
 ```
 
-Percentage multiplication and deadline arithmetic saturate at `Long.MAX_VALUE`; they do not wrap on overflow. A zero-millisecond synthetic sample is also handled without division.
+Percentage multiplication and deadline arithmetic saturate at `Long.MAX_VALUE`.
 
 ## Decision order
 
-The evaluator is deterministic:
+### Healthy baseline
 
-1. An unhealthy or insufficient baseline is never blamed on the strategy.
-2. A healthy recovery is required before the evaluator can keep or blame the strategy.
-3. Failed recovery produces `REJECT_ENVIRONMENT_UNSTABLE` or `INCONCLUSIVE`.
-4. Strategy failure with healthy baseline and recovery produces `ROLLBACK_CONFIRMED`.
-5. Excessive strategy latency with healthy baseline and recovery produces `ROLLBACK_CONFIRMED`.
-6. Only a fully healthy A/B/A sequence within the latency budget produces `KEEP_FOR_LAB_SESSION`.
+1. baseline must meet its sample budget;
+2. recovery must also be healthy before the strategy is kept or blamed;
+3. strategy failure or excessive latency produces rollback;
+4. a complete A/B/A sequence within budget produces `KEEP_FOR_LAB_SESSION`.
 
-Possible decisions:
+### Restricted baseline
 
-| Decision | Meaning |
-| --- | --- |
-| `KEEP_FOR_LAB_SESSION` | The local synthetic check passed; the strategy may remain approved only in the current Lab process/session. |
-| `ROLLBACK_CONFIRMED` | Baseline and recovery were healthy, while the strategy failed or exceeded its latency budget. |
-| `REJECT_BASELINE_UNHEALTHY` | The environment was already unhealthy before strategy execution. |
-| `REJECT_ENVIRONMENT_UNSTABLE` | Recovery did not restore a healthy baseline path. |
-| `INCONCLUSIVE` | The bounded samples were insufficient to make a safe decision. |
+A baseline is consistently restricted when it exceeds the failure budget and does not meet the success requirement.
+
+- restricted baseline + healthy strategy + restricted recovery → `STRATEGY_RESTORED_RESTRICTED_BASELINE`;
+- restricted baseline + healthy strategy + healthy recovery → `RESTRICTED_BASELINE_NOT_REPRODUCED`;
+- restricted baseline + consistently unhealthy strategy → `STRATEGY_DID_NOT_RESTORE_RESTRICTED_BASELINE`;
+- mixed or insufficient samples → `INCONCLUSIVE`.
+
+The recovery requirement prevents one transient baseline failure from being presented as strategy success.
 
 ## Session gate
-
-The immutable session gate has five states:
 
 ```text
 READY
@@ -121,42 +104,33 @@ DISABLED
   └─ no automatic transition
 ```
 
-The only public construction entry point creates the initial `READY` state. The primary constructor is module-internal, and the strategy module uses consistent data-class copy visibility, so external Kotlin modules cannot manufacture `EVALUATING`, `LAB_APPROVED`, or `COOLDOWN` with `copy()`. Runtime invariants additionally require `EVALUATING` to carry no previous decision, `LAB_APPROVED` to carry exactly `KEEP_FOR_LAB_SESSION`, and `COOLDOWN` to carry a non-keep decision plus a deadline.
-
-An interrupted service, setup failure, cancellation, or cleanup failure cannot silently leave the strategy approved. Generation checks are performed before and during every phase, write, echo validation, and relay-stat wait.
-
-A late or duplicated `ACTION_STOP` after a completed evaluation is explicitly idempotent. Once resources are closed and the gate is `LAB_APPROVED`, a stale stop command does not manufacture a failure or move the session into cooldown. Cooldown on stop is applied only while resources are still active or the gate is still `EVALUATING`.
+An interrupted service, setup failure, cancellation or cleanup failure cannot leave the strategy approved. Generation checks run before and during each phase, write, response validation and relay-stat wait. A duplicated stop after completed teardown is idempotent.
 
 ## Android boundaries
 
-The dedicated `ConnectXStrategyEvaluationService`:
+The external evidence service:
 
-- is started only after an explicit user action and Android `VpnService` consent;
-- uses only route `192.0.2.0/24`;
-- targets only `192.0.2.1:18444`;
-- rewrites that exact target to a server bound to `127.0.0.1`;
-- protects relay sockets from re-entering the VPN;
+- starts only after explicit user action and Android `VpnService` consent;
+- installs only `192.0.2.0/24`, never `0.0.0.0/0` or `::/0`;
+- validates one public hostname and pins one public IPv4;
+- permits only TCP/443;
+- sends one locally generated ClientHello and reads five TLS record-header bytes;
 - uses random in-memory SOCKS5 credentials;
-- closes client socket, native stack, TUN, relay, and endpoint in generation-safe order;
-- treats a duplicated post-teardown stop as an idempotent no-op for gate policy;
-- does not install `0.0.0.0/0` or `::/0`;
+- closes socket, native stack, TUN and relay in generation-safe order;
 - does not read or modify ordinary application traffic.
 
-The Android instrumentation gate verifies the full A/B/A path, confirms native teardown, sends a late stop after success, immediately starts a new explicit evaluation to `STATUS_STARTED`, and then verifies active-stop cleanup. This regression sequence prevents an already approved result from being poisoned by delayed service commands.
+## Release gate
 
-## Release activation
-
-The release workflow is committed with the implementation, but its `.publish` marker is intentionally not. After the implementation PR is merged and the workflow exists in `main`, a separate minimal marker PR activates the exact-commit release guard. This avoids relying on the same push both registering and triggering a newly introduced workflow.
+Android instrumentation runs two explicit sessions. Each session performs nine flows, so the deterministic loopback responder must observe eighteen connections. The release workflow repeats the canonical build, unit, lint, APK payload, strategy, evidence, JNI, TCP, UDP and DNS gates on the exact release commit before creating the prerelease.
 
 ## What this does not prove
 
-A successful local evaluation does not prove:
+A positive result does not prove:
 
-- that an ISP or firewall can be bypassed;
+- universal DPI bypass;
 - that write boundaries survive as packet boundaries;
-- compatibility with Telegram, YouTube, Discord, or any external service;
-- compatibility with TLS implementations other than the built-in synthetic record;
-- safety or effectiveness on a real restricted network;
-- production readiness.
+- compatibility with every endpoint behind Telegram, YouTube or Discord;
+- production readiness;
+- effectiveness on another network or later session.
 
-Real strategy claims require separate, consented device testing on representative restricted networks with reproducible diagnostics and rollback evidence.
+A public release may describe only the measured, repeated result for the selected target and current network.

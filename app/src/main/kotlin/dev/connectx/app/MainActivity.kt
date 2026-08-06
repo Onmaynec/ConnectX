@@ -30,6 +30,7 @@ import dev.connectx.core.model.ConnectionState
 import dev.connectx.core.model.ConnectionStateReducer
 import dev.connectx.core.model.ConnectionUiState
 import dev.connectx.core.model.EngineMode
+import dev.connectx.strategy.api.ExternalTlsEvidencePreset
 import dev.connectx.strategy.api.ExternalTlsEvidenceTarget
 import dev.connectx.strategy.api.HostnameValidationResult
 import dev.connectx.vpn.api.TunnelContract
@@ -295,6 +296,7 @@ class MainActivity : ComponentActivity() {
                             ConnectionState.OFF,
                             ConnectionState.ERROR,
                         ),
+                        onPresetSelected = ::selectEvidencePreset,
                         onHostnameChanged = ::updateEvidenceHostname,
                         onStart = ::requestExternalTlsEvidence,
                         onStop = ::stopExternalTlsEvidenceService,
@@ -371,6 +373,7 @@ class MainActivity : ComponentActivity() {
         pendingVpnRequest = PendingVpnRequest.EXTERNAL_TLS_EVIDENCE
         externalEvidenceState.value = ExternalTlsEvidenceUiState(
             hostnameInput = externalEvidenceState.value.hostnameInput,
+            selectedPresetId = externalEvidenceState.value.selectedPresetId,
             status = ExternalTlsEvidenceStatus.REQUESTING_PERMISSION,
             normalizedHostname = validation.normalizedHostname,
         )
@@ -384,10 +387,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun selectEvidencePreset(preset: ExternalTlsEvidencePreset) {
+        if (externalEvidenceState.value.isBusy) return
+        externalEvidenceState.value = ExternalTlsEvidenceUiState(
+            hostnameInput = preset.hostname ?: externalEvidenceState.value.hostnameInput,
+            selectedPresetId = preset.id,
+        )
+    }
+
     private fun updateEvidenceHostname(hostname: String) {
         if (externalEvidenceState.value.isBusy) return
         externalEvidenceState.value = ExternalTlsEvidenceUiState(
             hostnameInput = hostname.take(MAX_HOSTNAME_INPUT_CHARS),
+            selectedPresetId = ExternalTlsEvidencePreset.CUSTOM.id,
         )
     }
 
@@ -525,6 +537,30 @@ class MainActivity : ComponentActivity() {
                     recoveryRecordKind = intent.getStringExtra(
                         TunnelContract.EXTRA_EVIDENCE_RECOVERY_RECORD_KIND,
                     ),
+                    baselineSuccesses = intent.getIntExtra(
+                        TunnelContract.EXTRA_EVIDENCE_BASELINE_SUCCESSES,
+                        0,
+                    ),
+                    baselineFailures = intent.getIntExtra(
+                        TunnelContract.EXTRA_EVIDENCE_BASELINE_FAILURES,
+                        0,
+                    ),
+                    strategySuccesses = intent.getIntExtra(
+                        TunnelContract.EXTRA_EVIDENCE_STRATEGY_SUCCESSES,
+                        0,
+                    ),
+                    strategyFailures = intent.getIntExtra(
+                        TunnelContract.EXTRA_EVIDENCE_STRATEGY_FAILURES,
+                        0,
+                    ),
+                    recoverySuccesses = intent.getIntExtra(
+                        TunnelContract.EXTRA_EVIDENCE_RECOVERY_SUCCESSES,
+                        0,
+                    ),
+                    recoveryFailures = intent.getIntExtra(
+                        TunnelContract.EXTRA_EVIDENCE_RECOVERY_FAILURES,
+                        0,
+                    ),
                     decision = intent.getStringExtra(
                         TunnelContract.EXTRA_STRATEGY_DECISION,
                     ),
@@ -541,6 +577,7 @@ class MainActivity : ComponentActivity() {
             TunnelContract.STATUS_STOPPED -> {
                 externalEvidenceState.value = ExternalTlsEvidenceUiState(
                     hostnameInput = externalEvidenceState.value.hostnameInput,
+                    selectedPresetId = externalEvidenceState.value.selectedPresetId,
                 )
             }
 
