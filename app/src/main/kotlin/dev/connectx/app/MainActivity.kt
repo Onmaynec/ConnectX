@@ -570,6 +570,19 @@ class MainActivity : ComponentActivity() {
                     gateState = intent.getStringExtra(
                         TunnelContract.EXTRA_STRATEGY_GATE_STATE,
                     ),
+                    nativeAbi = intent.getStringExtra(TunnelContract.EXTRA_NATIVE_ABI),
+                    fdBefore = intent.getIntExtra(
+                        TunnelContract.EXTRA_EVIDENCE_FD_BEFORE,
+                        -1,
+                    ).takeIf { it >= 0 },
+                    fdAfter = intent.getIntExtra(
+                        TunnelContract.EXTRA_EVIDENCE_FD_AFTER,
+                        -1,
+                    ).takeIf { it >= 0 },
+                    fdDelta = intent.getIntExtra(
+                        TunnelContract.EXTRA_EVIDENCE_FD_DELTA,
+                        Int.MIN_VALUE,
+                    ).takeIf { it != Int.MIN_VALUE },
                     error = null,
                 )
             }

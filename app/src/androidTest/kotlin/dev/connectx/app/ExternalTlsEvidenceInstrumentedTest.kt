@@ -33,7 +33,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ExternalTlsEvidenceInstrumentedTest {
     @Test
-    fun debuggableEvidencePathTraversesRealTunAndAllowsNextExplicitSession() {
+    fun threeEvidenceSessionsTraverseRealTunAndStayWithinFdBudget() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val packageName = context.packageName
@@ -72,40 +72,23 @@ class ExternalTlsEvidenceInstrumentedTest {
             )
             instrumentation.waitForIdleSync()
 
-            ContextCompat.startForegroundService(
-                context,
-                evidenceServiceIntent(
-                    context = context,
-                    action = TunnelContract.ACTION_START,
-                    responderPort = responderPort,
-                ),
-            )
-            val first = awaitTerminalStatus(statuses)
-            assertSuccessfulEvidenceResult(
-                result = first,
-                responder = responder,
-                expectedTotalConnections = CONNECTIONS_PER_SESSION,
-            )
-            assertFalse(NativeTunBridge.isRunning())
-
-            // LAB_APPROVED is scoped to the completed attempt. A second explicit
-            // user action must create a new bounded session without a fake
-            // cooldown or leaked TUN/native resource from the first attempt.
-            ContextCompat.startForegroundService(
-                context,
-                evidenceServiceIntent(
-                    context = context,
-                    action = TunnelContract.ACTION_START,
-                    responderPort = responderPort,
-                ),
-            )
-            val second = awaitTerminalStatus(statuses)
-            assertSuccessfulEvidenceResult(
-                result = second,
-                responder = responder,
-                expectedTotalConnections = CONNECTIONS_PER_SESSION * 2L,
-            )
-            assertFalse(NativeTunBridge.isRunning())
+            repeat(SESSIONS_PER_TEST) { sessionIndex ->
+                ContextCompat.startForegroundService(
+                    context,
+                    evidenceServiceIntent(
+                        context = context,
+                        action = TunnelContract.ACTION_START,
+                        responderPort = responderPort,
+                    ),
+                )
+                val result = awaitTerminalStatus(statuses)
+                assertSuccessfulEvidenceResult(
+                    result = result,
+                    responder = responder,
+                    expectedTotalConnections = CONNECTIONS_PER_SESSION * (sessionIndex + 1L),
+                )
+                assertFalse(NativeTunBridge.isRunning())
+            }
         } finally {
             runCatching {
                 context.startService(
@@ -180,6 +163,19 @@ class ExternalTlsEvidenceInstrumentedTest {
         assertEquals(
             StrategySessionGateState.LAB_APPROVED.name,
             result.getStringExtra(TunnelContract.EXTRA_STRATEGY_GATE_STATE),
+        )
+        val fdBefore = result.getIntExtra(TunnelContract.EXTRA_EVIDENCE_FD_BEFORE, -1)
+        val fdAfter = result.getIntExtra(TunnelContract.EXTRA_EVIDENCE_FD_AFTER, -1)
+        val fdDelta = result.getIntExtra(
+            TunnelContract.EXTRA_EVIDENCE_FD_DELTA,
+            Int.MIN_VALUE,
+        )
+        assertTrue("missing FD baseline", fdBefore >= 0)
+        assertTrue("missing FD teardown sample", fdAfter >= 0)
+        assertEquals(fdAfter - fdBefore, fdDelta)
+        assertTrue(
+            "FD delta $fdDelta exceeded budget $FD_ALLOWED_DELTA",
+            fdDelta <= FD_ALLOWED_DELTA,
         )
         assertEquals(
             3,
@@ -316,6 +312,8 @@ class ExternalTlsEvidenceInstrumentedTest {
         const val TEST_PUBLIC_IPV4 = "93.184.216.34"
         const val EXPECTED_SPLIT_OFFSET = 43
         const val CONNECTIONS_PER_SESSION = 9L
+        const val SESSIONS_PER_TEST = 3
+        const val FD_ALLOWED_DELTA = 4
         const val TLS_HEADER_BYTES = 5L
         const val PROBE_TIMEOUT_SECONDS = 90L
     }

@@ -23,7 +23,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import dev.connectx.strategy.api.DEFAULT_ALLOWED_FD_DELTA
 import dev.connectx.strategy.api.ExternalTlsEvidenceAssessor
+import dev.connectx.strategy.api.ExternalTlsEvidenceEnvironmentPolicy
+import dev.connectx.strategy.api.ExternalTlsEvidenceFdSample
+import dev.connectx.strategy.api.ExternalTlsEvidenceFdStatus
 import dev.connectx.strategy.api.ExternalTlsEvidenceClass
 import dev.connectx.strategy.api.ExternalTlsEvidenceConfidence
 import dev.connectx.strategy.api.ExternalTlsEvidencePreset
@@ -62,6 +66,10 @@ data class ExternalTlsEvidenceUiState(
     val decision: String? = null,
     val reason: String? = null,
     val gateState: String? = null,
+    val nativeAbi: String? = null,
+    val fdBefore: Int? = null,
+    val fdAfter: Int? = null,
+    val fdDelta: Int? = null,
     val error: String? = null,
 ) {
     val isBusy: Boolean
@@ -94,6 +102,10 @@ data class ExternalTlsEvidenceUiState(
             decision = decision,
             reason = reason,
             gateState = gateState,
+            environment = currentAndroidEvidenceEnvironment(nativeAbi),
+            fdBefore = fdBefore,
+            fdAfter = fdAfter,
+            fdAllowedDelta = DEFAULT_ALLOWED_FD_DELTA,
         ),
     )
 }
@@ -211,7 +223,7 @@ fun ExternalTlsEvidencePanel(
                 }
 
                 Text(
-                    text = "Alpha.6 выполняет по три попытки baseline, TLS split и recovery, классифицирует доказательность и проверяет отчёт по allow-list schema. " +
+                    text = "Alpha.7 выполняет по три попытки baseline, TLS split и recovery, измеряет FD после полного teardown и формирует privacy-safe schema v3 для проверки на физическом устройстве. " +
                         "Она не отправляет HTTP, не входит в аккаунт, не читает тело ответа и " +
                         "не расшифровывает HTTPS. Результат относится только к текущей сети.",
                     style = MaterialTheme.typography.bodySmall,
@@ -278,6 +290,8 @@ private fun resultLines(state: ExternalTlsEvidenceUiState): List<String> = listO
     phaseLine("Recovery", state.recoveryLatencyMillis, state.recoveryRecordKind, state.recoverySuccesses, state.recoveryFailures),
     state.reason?.let { evidenceAssessmentLine(state) },
     state.reason?.let { evidenceRecommendationLine(state) },
+    state.reason?.let { deviceEnvironmentLine(state) },
+    state.reason?.let { fdLifecycleLine(state) },
     state.reason?.let { "Reason: $it" },
     state.gateState?.let { "Session gate: $it" },
 )
@@ -317,6 +331,27 @@ private fun evidenceRecommendationLine(state: ExternalTlsEvidenceUiState): Strin
             "повторить полную 3×A/B/A-проверку без смены сети"
     }
     return "Следующий шаг: $text"
+}
+
+private fun deviceEnvironmentLine(state: ExternalTlsEvidenceUiState): String {
+    val environment = currentAndroidEvidenceEnvironment(state.nativeAbi)
+    return "Устройство: ${environment.deviceClass.name} · API ${environment.androidApi ?: "UNKNOWN"} · ${environment.abiFamily.name}"
+}
+
+private fun fdLifecycleLine(state: ExternalTlsEvidenceUiState): String {
+    val assessment = ExternalTlsEvidenceEnvironmentPolicy.assessFd(
+        ExternalTlsEvidenceFdSample(
+            before = state.fdBefore,
+            after = state.fdAfter,
+            allowedDelta = DEFAULT_ALLOWED_FD_DELTA,
+        ),
+    )
+    val status = when (assessment.status) {
+        ExternalTlsEvidenceFdStatus.WITHIN_BUDGET -> "в пределах бюджета"
+        ExternalTlsEvidenceFdStatus.EXCEEDED -> "превышение бюджета"
+        ExternalTlsEvidenceFdStatus.UNKNOWN -> "данных недостаточно"
+    }
+    return "FD lifecycle: ${state.fdBefore ?: "?"} → ${state.fdAfter ?: "?"} · delta ${assessment.delta ?: "?"} · $status"
 }
 
 private fun ExternalTlsEvidenceUiState.toEvidenceSummary() =

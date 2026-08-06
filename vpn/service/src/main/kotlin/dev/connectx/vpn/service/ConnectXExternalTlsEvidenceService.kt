@@ -47,6 +47,7 @@ import dev.connectx.vpn.relay.RelayTargetResolver
 import dev.connectx.vpn.relay.SocketProtector
 import dev.connectx.vpn.relay.Socks5Credentials
 import java.io.DataInputStream
+import java.io.File
 import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -86,6 +87,7 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
 
     private var evidenceThread: Thread? = null
     private var nativeVersion: String? = null
+    private var evidenceFdBefore: Int? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -134,6 +136,8 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
             if (gateGeneration != null) enterCooldownAfterFailure()
             closeResources()
         }
+
+        evidenceFdBefore = currentOpenFdCount()
 
         val evidenceGeneration = generation + 1L
         generation = evidenceGeneration
@@ -360,7 +364,7 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
     }
 
     private fun establishTestTunnel(): ParcelFileDescriptor = Builder()
-        .setSession("ConnectX v0.3 alpha.6 TLS evidence")
+        .setSession("ConnectX v0.3 alpha.7 TLS evidence")
         .setMtu(DEFAULT_MTU)
         .addAddress(LOCAL_TUN_ADDRESS, LOCAL_TUN_PREFIX)
         .addRoute(TEST_ROUTE, TEST_ROUTE_PREFIX)
@@ -626,8 +630,10 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         if (evidenceGeneration != generation) return
 
         val completedVersion = nativeVersion
+        val completedFdBefore = evidenceFdBefore
         val shouldCooldown = gateGeneration == evidenceGeneration
         val cleanupError = closeResources()
+        val completedFdAfter = currentOpenFdCount()
         val result = outcome.getOrNull()
         if (result != null && cleanupError == null) {
             publishStatus(
@@ -635,6 +641,8 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
                 nativeVersion = completedVersion,
                 target = result.target,
                 result = result,
+                fdBefore = completedFdBefore,
+                fdAfter = completedFdAfter,
             )
         } else {
             if (shouldCooldown) enterCooldownAfterFailure()
@@ -720,8 +728,13 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
 
         relayCredentials = null
         nativeVersion = null
+        evidenceFdBefore = null
         return firstError
     }
+
+    private fun currentOpenFdCount(): Int? = runCatching {
+        File("/proc/self/fd").list()?.size
+    }.getOrNull()
 
     private fun hasActiveResources(): Boolean =
         evidenceThread != null ||
@@ -736,6 +749,8 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         nativeVersion: String? = null,
         target: ExternalTlsEvidenceTarget? = null,
         result: ExternalTlsEvidenceResult? = null,
+        fdBefore: Int? = null,
+        fdAfter: Int? = null,
     ) {
         val intent = Intent(TunnelContract.ACTION_STATUS).apply {
             setPackage(packageName)
@@ -747,6 +762,11 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
             putExtra(TunnelContract.EXTRA_NATIVE_ABI, currentAbi())
             nativeVersion?.let { putExtra(TunnelContract.EXTRA_NATIVE_VERSION, it) }
             error?.let { putExtra(TunnelContract.EXTRA_ERROR, it) }
+            fdBefore?.let { putExtra(TunnelContract.EXTRA_EVIDENCE_FD_BEFORE, it) }
+            fdAfter?.let { putExtra(TunnelContract.EXTRA_EVIDENCE_FD_AFTER, it) }
+            if (fdBefore != null && fdAfter != null) {
+                putExtra(TunnelContract.EXTRA_EVIDENCE_FD_DELTA, fdAfter - fdBefore)
+            }
             target?.let { evidenceTarget ->
                 putExtra(TunnelContract.EXTRA_EVIDENCE_HOSTNAME, evidenceTarget.hostname)
                 putExtra(

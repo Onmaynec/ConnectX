@@ -21,12 +21,12 @@ VALID = {
     "schema_version": 1,
     "publish": True,
     "prerelease": True,
-    "version_name": "0.3.0-alpha.6",
-    "version_code": 13,
-    "tag": "v0.3.0-alpha.6",
-    "title": "ConnectX v0.3.0-alpha.6 — Unified Guarded Prerelease",
-    "notes_path": "docs/releases/v0.3.0-alpha.6.md",
-    "scope_path": "docs/roadmap/alpha6-scope.md",
+    "version_name": "0.3.0-alpha.7",
+    "version_code": 14,
+    "tag": "v0.3.0-alpha.7",
+    "title": "ConnectX v0.3.0-alpha.7 — Unified Guarded Prerelease",
+    "notes_path": "docs/releases/v0.3.0-alpha.7.md",
+    "scope_path": "docs/roadmap/alpha7-scope.md",
     "expected_ci_workflow": "Android CI",
     "expected_ci_event": "push",
     "expected_branch": "main",
@@ -38,9 +38,9 @@ class ManifestValidationTest(unittest.TestCase):
     def test_valid_manifest_emits_deterministic_asset_names(self) -> None:
         manifest = manifest_from_mapping(VALID)
         outputs = github_outputs(manifest)
-        self.assertEqual(outputs["tag"], "v0.3.0-alpha.6")
-        self.assertEqual(outputs["apk_asset_name"], "ConnectX-v0.3.0-alpha.6-debug.apk")
-        self.assertEqual(outputs["native_asset_name"], "ConnectX-v0.3.0-alpha.6-native.zip")
+        self.assertEqual(outputs["tag"], "v0.3.0-alpha.7")
+        self.assertEqual(outputs["apk_asset_name"], "ConnectX-v0.3.0-alpha.7-debug.apk")
+        self.assertEqual(outputs["native_asset_name"], "ConnectX-v0.3.0-alpha.7-native.zip")
 
     def test_unknown_key_is_rejected(self) -> None:
         with self.assertRaises(GuardError):
@@ -93,14 +93,14 @@ class ProvenanceValidationTest(unittest.TestCase):
 
 
 class RepositoryConsistencyTest(unittest.TestCase):
-    def _write_repo(self, root: Path, readme_version: str = "0.3.0-alpha.6") -> None:
+    def _write_repo(self, root: Path, readme_version: str = "0.3.0-alpha.7") -> None:
         files = {
-            "app/build.gradle.kts": 'versionCode = 13\nversionName = "0.3.0-alpha.6"\n',
+            "app/build.gradle.kts": 'versionCode = 14\nversionName = "0.3.0-alpha.7"\n',
             "README.md": f"## Текущая версия разработки: v{readme_version}\n",
-            "CHANGELOG.md": "## [0.3.0-alpha.6]\n",
-            "engine/go/bridge/session.go": 'const bridgeReleaseVersion = "0.3.0-alpha.6"\n',
-            "docs/releases/v0.3.0-alpha.6.md": "notes\n",
-            "docs/roadmap/alpha6-scope.md": "scope\n",
+            "CHANGELOG.md": "## [0.3.0-alpha.7]\n",
+            "engine/go/bridge/session.go": 'const bridgeReleaseVersion = "0.3.0-alpha.7"\n',
+            "docs/releases/v0.3.0-alpha.7.md": "notes\n",
+            "docs/roadmap/alpha7-scope.md": "scope\n",
             "THIRD_PARTY_NOTICES.md": "notice\n",
             "licenses/tun2socks-MIT.txt": "license\n",
             "licenses/gvisor-LICENSE.txt": "license\n",
