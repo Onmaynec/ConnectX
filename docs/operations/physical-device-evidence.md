@@ -15,6 +15,8 @@ Alpha.7 подготавливает воспроизводимую провер
 - три последовательные TEST-NET evidence-сессии проходят через настоящий Android TUN;
 - после каждой сессии native bridge остановлен, а FD delta не превышает bounded budget.
 
+FD baseline снимается после одноразовой загрузки JNI/Go runtime и успешного native version self-check, но до создания relay, TUN и native session. Поэтому измерение охватывает ресурсы конкретной evidence-сессии и не смешивает их с постоянными process-level descriptors загруженного runtime. Бюджет остаётся равным `4` и не увеличивается для маскировки cold-start.
+
 Collector не записывает serial, model, manufacturer, fingerprint, SSID, hostname, IPv4 или содержимое трафика. Raw Gradle/ADB output не включается в shareable bundle.
 
 ## Подготовка
