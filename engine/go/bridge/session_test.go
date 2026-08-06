@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"golang.org/x/sys/unix"
+	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
 func TestVersionContainsReleaseAndPinnedCommit(t *testing.T) {
@@ -56,6 +58,26 @@ func TestRejectedStartClosesTransferredDescriptor(t *testing.T) {
 
 	if _, err := unix.FcntlInt(uintptr(fds[0]), unix.F_GETFD, 0); err == nil {
 		t.Fatal("transferred descriptor remains open after failed start")
+	}
+}
+
+func TestSingleNICIDRequiresExactlyOneNIC(t *testing.T) {
+	if _, err := singleNICID(nil); err == nil {
+		t.Fatal("singleNICID(nil) succeeded")
+	}
+	if _, err := singleNICID(map[tcpip.NICID]stack.NICInfo{
+		1: {},
+		2: {},
+	}); err == nil {
+		t.Fatal("singleNICID(two NICs) succeeded")
+	}
+
+	got, err := singleNICID(map[tcpip.NICID]stack.NICInfo{7: {}})
+	if err != nil {
+		t.Fatalf("singleNICID(one NIC): %v", err)
+	}
+	if got != 7 {
+		t.Fatalf("singleNICID(one NIC) = %d, expected 7", got)
 	}
 }
 
