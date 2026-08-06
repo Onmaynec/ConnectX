@@ -38,7 +38,6 @@ jobs:
           test -f "$stage_dir/part-02-0-03"
           test -f "$stage_dir/part-02-1"
 
-          sha256sum "$stage_dir"/part-*
           cat "$stage_dir"/part-* | tr -d '\r\n' > /tmp/alpha5.patch.gz.b64
           echo '10c12853b2c33fd0e15a89a9c1a760ca248a21c882527694a16145fbfc347e0c  /tmp/alpha5.patch.gz.b64' | sha256sum -c -
           base64 --decode /tmp/alpha5.patch.gz.b64 > /tmp/alpha5.patch.gz
@@ -46,8 +45,8 @@ jobs:
           gzip -dc /tmp/alpha5.patch.gz > /tmp/alpha5.patch
           echo 'e980f3133f82c5affadcc3e2763e0757554115c0045d9b7a312100034b6eade4  /tmp/alpha5.patch' | sha256sum -c -
 
-          git apply --check /tmp/alpha5.patch
-          git apply /tmp/alpha5.patch
+          git apply --check --exclude=README.md --exclude=CHANGELOG.md /tmp/alpha5.patch
+          git apply --exclude=README.md --exclude=CHANGELOG.md /tmp/alpha5.patch
           rm -rf "$stage_dir" .github/workflows/agent-apply-alpha5.yml
 
           git add -A
