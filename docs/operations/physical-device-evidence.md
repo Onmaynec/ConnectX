@@ -13,9 +13,12 @@ Alpha.7 подготавливает воспроизводимую провер
 - native library уже собрана из зафиксированного source tree;
 - JNI smoke и controlled failure lifecycle проходят;
 - три последовательные TEST-NET evidence-сессии проходят через настоящий Android TUN;
-- после каждой сессии native bridge остановлен, а FD delta не превышает bounded budget.
+- после каждой сессии native bridge остановлен;
+- вторая и третья сессии не превышают bounded FD budget.
 
-FD baseline снимается после одноразовой загрузки JNI/Go runtime и успешного native version self-check, но до создания relay, TUN и native session. Поэтому измерение охватывает ресурсы конкретной evidence-сессии и не смешивает их с постоянными process-level descriptors загруженного runtime. Бюджет остаётся равным `4` и не увеличивается для маскировки cold-start.
+Полный Go/tun2socks runtime лениво открывает постоянные process-level descriptors при первой настоящей native session. Поэтому первая из трёх сессий является явным warm-up: после неё публикуется `fd_after`, но `fd_before` и `fd_delta` остаются `UNKNOWN`, чтобы одноразовая инициализация не выдавалась за утечку.
+
+После успешного teardown процесс считается warmed. Перед второй и третьей сессиями снимается новый FD baseline, а после teardown проверяется delta. Бюджет остаётся равным `4` и не увеличивается для маскировки cold-start или повторяемого роста ресурсов.
 
 Collector не записывает serial, model, manufacturer, fingerprint, SSID, hostname, IPv4 или содержимое трафика. Raw Gradle/ADB output не включается в shareable bundle.
 
