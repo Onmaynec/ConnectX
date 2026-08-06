@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"golang.org/x/sys/unix"
+	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 
 	"github.com/xjasonlyu/tun2socks/v2/core"
@@ -43,6 +44,7 @@ var (
 type Session struct {
 	device device.Device
 	stack  *stack.Stack
+	nicID  tcpip.NICID
 	tunnel *tunnel.Tunnel
 	flows  *flowTracker
 }
@@ -163,13 +165,36 @@ func Start(
 		return CodeStackInit, fmt.Errorf("create gVisor stack: %w", err)
 	}
 
+	nicID, err := singleNICID(netstack.NICInfo())
+	if err != nil {
+		for id := range netstack.NICInfo() {
+			_ = netstack.RemoveNIC(id)
+		}
+		netstack.Close()
+		netstack.Wait()
+		transport.Close()
+		dev.Close()
+		return CodeStackInit, err
+	}
+
 	active = &Session{
 		device: dev,
 		stack:  netstack,
+		nicID:  nicID,
 		tunnel: transport,
 		flows:  flows,
 	}
 	return CodeOK, nil
+}
+
+func singleNICID(nics map[tcpip.NICID]stack.NICInfo) (tcpip.NICID, error) {
+	if len(nics) != 1 {
+		return 0, fmt.Errorf("expected exactly one gVisor NIC, got %d", len(nics))
+	}
+	for id := range nics {
+		return id, nil
+	}
+	panic("unreachable: one-entry NIC map had no key")
 }
 
 func Stop() error {
@@ -182,18 +207,27 @@ func Stop() error {
 		return nil
 	}
 
-	// Closing the device first unblocks the reader owned by gVisor. Active
-	// proxy-side connections are explicitly interrupted because upstream
-	// Tunnel.Close only cancels the dispatcher and does not wait for per-flow
-	// TCP/UDP copy workers.
-	session.device.Close()
+	// Stop proxy-side work first, then explicitly remove the NIC while its TUN
+	// descriptor is still open. The pinned gVisor fdbased LinkEndpoint.Close is
+	// a no-op; RemoveNIC is what calls Attach(nil), signals each stopfd, waits
+	// for dispatch loops, and releases per-processor resources.
 	session.flows.requestCloseAll()
+	var detachError error
+	if session.stack.HasNIC(session.nicID) {
+		if err := session.stack.RemoveNIC(session.nicID); err != nil {
+			detachError = fmt.Errorf("detach gVisor NIC %d: %s", session.nicID, err)
+		}
+	}
+
+	// The endpoint no longer reads from the transferred descriptor after
+	// RemoveNIC returns, so ownership can now be released safely.
+	session.device.Close()
 	session.stack.Close()
 	session.stack.Wait()
 
-	// No new flow can be emitted after the stack has stopped. Cancel the
-	// dispatcher, interrupt any connection that raced with the first snapshot,
-	// and require every tunnel worker to reach its deferred connection Close.
+	// No new flow can be emitted after NIC detach. Cancel the dispatcher,
+	// interrupt any connection that raced with the first snapshot, and require
+	// every tunnel worker to reach its deferred wrapper Close.
 	session.tunnel.Close()
 	session.flows.requestCloseAll()
 	if !session.flows.waitEmpty(flowDrainTimeout) {
@@ -202,7 +236,7 @@ func Stop() error {
 			session.flows.count(),
 		)
 	}
-	return nil
+	return detachError
 }
 
 func IsRunning() bool {
