@@ -15,7 +15,6 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/core"
 	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
-	"github.com/xjasonlyu/tun2socks/v2/core/device/fdbased"
 	"github.com/xjasonlyu/tun2socks/v2/proxy/socks5"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel/statistic"
@@ -134,7 +133,7 @@ func Start(
 		return CodeProxyInit, fmt.Errorf("create SOCKS5 proxy: %w", err)
 	}
 
-	dev, err := fdbased.Open(strconv.Itoa(tunFD), uint32(mtu), 0)
+	dev, err := openSingleProcessorTun(tunFD, uint32(mtu))
 	if err != nil {
 		return CodeDeviceInit, fmt.Errorf("open TUN fd: %w", err)
 	}
