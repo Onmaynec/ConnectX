@@ -276,8 +276,8 @@ private fun resultLines(state: ExternalTlsEvidenceUiState): List<String> = listO
     phaseLine("Baseline", state.baselineLatencyMillis, state.baselineRecordKind, state.baselineSuccesses, state.baselineFailures),
     phaseLine("Strategy", state.strategyLatencyMillis, state.strategyRecordKind, state.strategySuccesses, state.strategyFailures),
     phaseLine("Recovery", state.recoveryLatencyMillis, state.recoveryRecordKind, state.recoverySuccesses, state.recoveryFailures),
-    evidenceAssessmentLine(state),
-    evidenceRecommendationLine(state),
+    state.reason?.let { evidenceAssessmentLine(state) },
+    state.reason?.let { evidenceRecommendationLine(state) },
     state.reason?.let { "Reason: $it" },
     state.gateState?.let { "Session gate: $it" },
 )
