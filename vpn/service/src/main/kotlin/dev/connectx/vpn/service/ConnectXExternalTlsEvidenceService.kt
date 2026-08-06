@@ -207,7 +207,7 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
 
         val preparedVersion = prepareNativeRuntime()
         nativeVersion = preparedVersion
-        evidenceFdBefore = currentOpenFdCount()
+        evidenceFdBefore = if (processFdLifecycleWarmed) currentOpenFdCount() else null
 
         checkGeneration(expectedGeneration)
         beginSessionGate(expectedGeneration)
@@ -642,6 +642,9 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         val shouldCooldown = gateGeneration == evidenceGeneration
         val cleanupError = closeResources()
         val completedFdAfter = currentOpenFdCount()
+        if (cleanupError == null && completedFdAfter != null) {
+            processFdLifecycleWarmed = true
+        }
         val result = outcome.getOrNull()
         if (result != null && cleanupError == null) {
             publishStatus(
@@ -1017,6 +1020,9 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
 
         @Volatile
         var processGate = StrategySessionGate()
+
+        @Volatile
+        var processFdLifecycleWarmed = false
 
         val EVALUATION_POLICY = StrategyEvaluationPolicy(
             requiredSuccessesPerPhase = 2,

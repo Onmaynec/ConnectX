@@ -86,6 +86,7 @@ class ExternalTlsEvidenceInstrumentedTest {
                     result = result,
                     responder = responder,
                     expectedTotalConnections = CONNECTIONS_PER_SESSION * (sessionIndex + 1L),
+                    expectMeasuredFd = sessionIndex > 0,
                 )
                 assertFalse(NativeTunBridge.isRunning())
             }
@@ -110,6 +111,7 @@ class ExternalTlsEvidenceInstrumentedTest {
         result: Intent,
         responder: LoopbackTlsEvidenceServer,
         expectedTotalConnections: Long,
+        expectMeasuredFd: Boolean,
     ) {
         val nativeTrace = NativeTunBridge.transportDiagnostics()
         val failure = buildString {
@@ -170,13 +172,22 @@ class ExternalTlsEvidenceInstrumentedTest {
             TunnelContract.EXTRA_EVIDENCE_FD_DELTA,
             Int.MIN_VALUE,
         )
-        assertTrue("missing FD baseline", fdBefore >= 0)
         assertTrue("missing FD teardown sample", fdAfter >= 0)
-        assertEquals(fdAfter - fdBefore, fdDelta)
-        assertTrue(
-            "FD delta $fdDelta exceeded budget $FD_ALLOWED_DELTA",
-            fdDelta <= FD_ALLOWED_DELTA,
-        )
+        if (expectMeasuredFd) {
+            assertTrue("missing measured FD baseline", fdBefore >= 0)
+            assertEquals(fdAfter - fdBefore, fdDelta)
+            assertTrue(
+                "FD delta $fdDelta exceeded budget $FD_ALLOWED_DELTA",
+                fdDelta <= FD_ALLOWED_DELTA,
+            )
+        } else {
+            assertEquals("first native session must be explicit warm-up", -1, fdBefore)
+            assertEquals(
+                "warm-up session must not publish a misleading FD delta",
+                Int.MIN_VALUE,
+                fdDelta,
+            )
+        }
         assertEquals(
             3,
             result.getIntExtra(TunnelContract.EXTRA_EVIDENCE_BASELINE_SUCCESSES, 0),
