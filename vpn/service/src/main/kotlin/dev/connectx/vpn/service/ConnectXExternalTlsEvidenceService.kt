@@ -13,6 +13,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
+import android.system.Os
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import dev.connectx.strategy.api.ApplicationProtocol
 import dev.connectx.strategy.api.ExternalTlsEvidenceTarget
@@ -88,6 +90,7 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
     private var evidenceThread: Thread? = null
     private var nativeVersion: String? = null
     private var evidenceFdBefore: Int? = null
+    private var evidenceFdKindsBefore: String? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -207,7 +210,9 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
 
         val preparedVersion = prepareNativeRuntime()
         nativeVersion = preparedVersion
-        evidenceFdBefore = if (processFdLifecycleWarmed) currentOpenFdCount() else null
+        val fdBaseline = if (processFdLifecycleWarmed) currentFdSnapshot() else null
+        evidenceFdBefore = fdBaseline?.total
+        evidenceFdKindsBefore = fdBaseline?.summary()
 
         checkGeneration(expectedGeneration)
         beginSessionGate(expectedGeneration)
@@ -639,9 +644,17 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
 
         val completedVersion = nativeVersion
         val completedFdBefore = evidenceFdBefore
+        val completedFdKindsBefore = evidenceFdKindsBefore
         val shouldCooldown = gateGeneration == evidenceGeneration
         val cleanupError = closeResources()
-        val completedFdAfter = currentOpenFdCount()
+        val completedFdSnapshotAfter = currentFdSnapshot()
+        val completedFdAfter = completedFdSnapshotAfter?.total
+        Log.i(
+            FD_LOG_TAG,
+            "generation=$evidenceGeneration warmed=$processFdLifecycleWarmed " +
+                "before=${completedFdKindsBefore ?: "UNKNOWN"} " +
+                "after=${completedFdSnapshotAfter?.summary() ?: "UNKNOWN"}",
+        )
         if (cleanupError == null && completedFdAfter != null) {
             processFdLifecycleWarmed = true
         }
@@ -740,11 +753,40 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         relayCredentials = null
         nativeVersion = null
         evidenceFdBefore = null
+        evidenceFdKindsBefore = null
         return firstError
     }
 
-    private fun currentOpenFdCount(): Int? = runCatching {
-        File("/proc/self/fd").list()?.size
+    private fun currentFdSnapshot(): FdSnapshot? = runCatching {
+        val directory = File("/proc/self/fd")
+        val entries = directory.listFiles() ?: return@runCatching null
+        var sockets = 0
+        var pipes = 0
+        var anonInodes = 0
+        var devices = 0
+        var files = 0
+        var other = 0
+        entries.forEach { entry ->
+            val target = runCatching { Os.readlink(entry.absolutePath) }.getOrNull()
+            when {
+                target == null -> other += 1
+                target.startsWith("socket:") -> sockets += 1
+                target.startsWith("pipe:") -> pipes += 1
+                target.startsWith("anon_inode:") -> anonInodes += 1
+                target.startsWith("/dev/") -> devices += 1
+                target.startsWith("/") -> files += 1
+                else -> other += 1
+            }
+        }
+        FdSnapshot(
+            total = entries.size,
+            sockets = sockets,
+            pipes = pipes,
+            anonInodes = anonInodes,
+            devices = devices,
+            files = files,
+            other = other,
+        )
     }.getOrNull()
 
     private fun hasActiveResources(): Boolean =
@@ -952,6 +994,20 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
 
     private fun currentAbi(): String = Build.SUPPORTED_ABIS.firstOrNull() ?: Build.CPU_ABI
 
+    private data class FdSnapshot(
+        val total: Int,
+        val sockets: Int,
+        val pipes: Int,
+        val anonInodes: Int,
+        val devices: Int,
+        val files: Int,
+        val other: Int,
+    ) {
+        fun summary(): String =
+            "total=$total,socket=$sockets,pipe=$pipes,anon=$anonInodes," +
+                "device=$devices,file=$files,other=$other"
+    }
+
     private data class EvidenceRequest(
         val rawHostname: String,
         val testResolvedIpv4: String?,
@@ -1045,6 +1101,7 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         const val EVIDENCE_TEST_HOST = "192.0.2.1"
         const val EVIDENCE_TEST_PORT = 18_445
         const val SAMPLES_PER_PHASE = 3
+        const val FD_LOG_TAG = "ConnectX-FD"
         const val PHASE_TIMEOUT_MILLIS = 6_000
         const val ROUTE_SETTLE_MILLIS = 300L
         const val STRATEGY_WRITE_GAP_MILLIS = 25L
