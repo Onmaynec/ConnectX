@@ -1,3 +1,3 @@
-Publish ConnectX v0.3.0-alpha.4 only from the exact main commit after the standalone release workflow passes every static and Android runtime gate.
+Publish ConnectX v0.3.0-alpha.4 from the immutable successful Android CI run 31078949278.
 
-The release must contain the alpha.4 APK, native archive, notices and SHA-256 checksums.
+The publisher must verify the source commit, branch, workflow result, product-tree equivalence, APK and native SHA-256 values, legal payloads and final main commit before creating the prerelease.
