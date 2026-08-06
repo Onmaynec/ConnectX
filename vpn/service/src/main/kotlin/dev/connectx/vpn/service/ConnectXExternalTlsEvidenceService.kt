@@ -137,8 +137,6 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
             closeResources()
         }
 
-        evidenceFdBefore = currentOpenFdCount()
-
         val evidenceGeneration = generation + 1L
         generation = evidenceGeneration
         val thread = Thread(
@@ -206,6 +204,10 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         check(payload.contentEquals(plan.reconstruct())) {
             "Strategy planner изменил reconstructed ClientHello"
         }
+
+        val preparedVersion = prepareNativeRuntime()
+        nativeVersion = preparedVersion
+        evidenceFdBefore = currentOpenFdCount()
 
         checkGeneration(expectedGeneration)
         beginSessionGate(expectedGeneration)
@@ -372,16 +374,22 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         .establish()
         ?: error("Android не создал локальный TUN-интерфейс")
 
-    private fun startNativeSession(
-        tunnel: ParcelFileDescriptor,
-        relayPort: Int,
-    ): String {
+    private fun prepareNativeRuntime(): String {
         check(NativeTunBridge.isAvailable()) {
             NativeTunBridge.loadError()
                 ?: "Native bridge недоступен для ABI этого устройства"
         }
-        val version = NativeTunBridge.version().getOrElse { error ->
+        return NativeTunBridge.version().getOrElse { error ->
             throw IllegalStateException("JNI version self-check завершился ошибкой", error)
+        }
+    }
+
+    private fun startNativeSession(
+        tunnel: ParcelFileDescriptor,
+        relayPort: Int,
+    ): String {
+        val version = checkNotNull(nativeVersion) {
+            "Native runtime не подготовлен до FD baseline"
         }
         val credentials = checkNotNull(relayCredentials) {
             "Relay credentials отсутствуют во время запуска native bridge"
