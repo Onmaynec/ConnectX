@@ -1,0 +1,373 @@
+name: Publish guarded prerelease
+
+on:
+  workflow_run:
+    workflows:
+      - Android CI
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact main commit already verified by a successful Android CI push run
+        required: false
+        type: string
+      publish:
+        description: Create or verify the GitHub prerelease after preflight
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: connectx-guarded-prerelease
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Verify exact CI artifacts and publish
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Resolve exact successful Android CI run
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_RUN_ID: ${{ github.event.workflow_run.id }}
+          EVENT_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_TARGET_SHA: ${{ inputs.target_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == 'workflow_run' ]]; then
+            target_sha="$EVENT_HEAD_SHA"
+            run_id="$EVENT_RUN_ID"
+          else
+            target_sha="${INPUT_TARGET_SHA:-}"
+            if [[ -z "$target_sha" ]]; then
+              target_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq '.sha')"
+            fi
+            [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]]
+            run_json="$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow 'Android CI' \
+              --commit "$target_sha" \
+              --event push \
+              --status success \
+              --limit 20 \
+              --json databaseId,name,status,conclusion,event,headSha,headBranch,createdAt \
+              --jq "[.[] | select(.headSha == \"$target_sha\" and .headBranch == \"main\" and .event == \"push\" and .conclusion == \"success\")] | sort_by(.databaseId) | last")"
+            [[ "$run_json" != 'null' && -n "$run_json" ]]
+            run_id="$(jq -r '.databaseId' <<<"$run_json")"
+          fi
+          [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$run_id" =~ ^[0-9]+$ ]]
+          echo "target_sha=$target_sha" >> "$GITHUB_OUTPUT"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.source.outputs.target_sha }}
+          fetch-depth: 2
+
+      - name: Validate manifest, repository and CI provenance
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          TARGET_SHA: ${{ steps.source.outputs.target_sha }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          python3 -m unittest discover -s scripts/tests -p 'test_release_guard.py'
+          python3 scripts/release_guard.py validate-repo
+          python3 scripts/release_guard.py github-output >> "$GITHUB_OUTPUT"
+
+          gh run view "$SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json databaseId,name,status,conclusion,event,headSha,headBranch \
+            > trusted-run.json
+          python3 scripts/release_guard.py validate-run \
+            --run-json trusted-run.json \
+            --target-sha "$TARGET_SHA"
+
+          if [[ "$EVENT_NAME" == 'workflow_run' ]]; then
+            parent_sha="$(git rev-parse HEAD^1)"
+            git diff --name-only "$parent_sha" "$TARGET_SHA" | sort > candidate-changes.txt
+            if ! grep -Fxq 'release/prerelease.json' candidate-changes.txt; then
+              echo 'skip=true' >> "$GITHUB_OUTPUT"
+              echo 'skip_reason=release manifest was not changed by this commit' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            publish_requested="$(python3 scripts/release_guard.py github-output | awk -F= '$1 == "publish" { print $2 }')"
+          else
+            publish_requested="${INPUT_PUBLISH:-false}"
+          fi
+          [[ "$publish_requested" == 'true' || "$publish_requested" == 'false' ]]
+          echo 'skip=false' >> "$GITHUB_OUTPUT"
+          echo "publish_requested=$publish_requested" >> "$GITHUB_OUTPUT"
+
+      - name: Check existing tag boundary
+        id: existing
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.source.outputs.target_sha }}
+          TAG_NAME: ${{ steps.guard.outputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolve_tag_commit() {
+            local ref_json object_type object_sha tag_json
+            ref_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG_NAME")"
+            object_type="$(jq -r '.object.type' <<<"$ref_json")"
+            object_sha="$(jq -r '.object.sha' <<<"$ref_json")"
+            if [[ "$object_type" == 'tag' ]]; then
+              tag_json="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
+              object_type="$(jq -r '.object.type' <<<"$tag_json")"
+              object_sha="$(jq -r '.object.sha' <<<"$tag_json")"
+            fi
+            test "$object_type" = 'commit'
+            printf '%s\n' "$object_sha"
+          }
+
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG_NAME" >/dev/null 2>&1; then
+            existing_sha="$(resolve_tag_commit)"
+            if [[ "$existing_sha" != "$TARGET_SHA" ]]; then
+              if [[ "$EVENT_NAME" == 'workflow_run' ]]; then
+                echo 'skip=true' >> "$GITHUB_OUTPUT"
+                echo "skip_reason=$TAG_NAME is already pinned to $existing_sha" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "$TAG_NAME points to $existing_sha instead of $TARGET_SHA" >&2
+              exit 1
+            fi
+            gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null
+            echo 'release_exists=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'release_exists=false' >> "$GITHUB_OUTPUT"
+          fi
+          echo 'skip=false' >> "$GITHUB_OUTPUT"
+
+      - name: Download exact Android CI artifacts
+        if: steps.guard.outputs.skip != 'true' && steps.existing.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.source.outputs.target_sha }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p downloaded/apk downloaded/native provenance
+          apk_artifact="connectx-debug-$TARGET_SHA"
+          native_artifact="connectx-native-$TARGET_SHA"
+
+          artifacts_ready=false
+          for attempt in 1 2 3 4 5 6; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts" > provenance/artifacts.json
+            apk_count="$(jq --arg name "$apk_artifact" '[.artifacts[] | select(.name == $name and .expired == false)] | length' provenance/artifacts.json)"
+            native_count="$(jq --arg name "$native_artifact" '[.artifacts[] | select(.name == $name and .expired == false)] | length' provenance/artifacts.json)"
+            if [[ "$apk_count" == '1' && "$native_count" == '1' ]]; then
+              artifacts_ready=true
+              break
+            fi
+            echo "Artifacts are not visible yet (attempt $attempt/6)"
+            sleep 10
+          done
+          test "$artifacts_ready" = 'true'
+
+          download_artifact() {
+            local name="$1"
+            local destination="$2"
+            for attempt in 1 2 3 4; do
+              rm -rf "$destination"
+              mkdir -p "$destination"
+              if gh run download "$SOURCE_RUN_ID" \
+                --repo "$GITHUB_REPOSITORY" \
+                --name "$name" \
+                --dir "$destination"; then
+                return 0
+              fi
+              echo "Artifact download retry $attempt/4: $name"
+              sleep 10
+            done
+            return 1
+          }
+
+          download_artifact "$apk_artifact" downloaded/apk
+          download_artifact "$native_artifact" downloaded/native
+
+          test -s downloaded/apk/app-debug.apk
+          test -s downloaded/native/jniLibs/arm64-v8a/libconnectxbridge.so
+          test -s downloaded/native/jniLibs/x86_64/libconnectxbridge.so
+          grep -Fq 'go_version=go1.26.3' downloaded/native/metadata/build.txt
+          grep -Fq 'ndk_version=28.0.13004108' downloaded/native/metadata/build.txt
+          grep -Fq 'abis=arm64-v8a,x86_64' downloaded/native/metadata/build.txt
+
+          unzip -l downloaded/apk/app-debug.apk | tee provenance/apk-contents.txt
+          grep -Fq 'lib/arm64-v8a/libconnectxbridge.so' provenance/apk-contents.txt
+          grep -Fq 'lib/x86_64/libconnectxbridge.so' provenance/apk-contents.txt
+          grep -Fq 'assets/THIRD_PARTY_NOTICES.md' provenance/apk-contents.txt
+          grep -Fq 'assets/tun2socks-MIT.txt' provenance/apk-contents.txt
+          grep -Fq 'assets/gvisor-LICENSE.txt' provenance/apk-contents.txt
+
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg commit_sha "$TARGET_SHA" \
+            --argjson workflow_run_id "$SOURCE_RUN_ID" \
+            --arg workflow 'Android CI' \
+            --arg event push \
+            --arg branch main \
+            --arg apk_artifact "$apk_artifact" \
+            --arg native_artifact "$native_artifact" \
+            --slurpfile artifacts provenance/artifacts.json \
+            '{
+              schema_version: 1,
+              repository: $repository,
+              commit_sha: $commit_sha,
+              workflow_run_id: $workflow_run_id,
+              workflow: $workflow,
+              event: $event,
+              branch: $branch,
+              artifacts: [
+                ($artifacts[0].artifacts[] | select(.name == $apk_artifact or .name == $native_artifact) | {name, id, digest, size_in_bytes})
+              ]
+            }' > provenance/PROVENANCE.json
+
+      - name: Prepare deterministic release assets
+        if: steps.guard.outputs.skip != 'true' && steps.existing.outputs.skip != 'true'
+        env:
+          APK_ASSET_NAME: ${{ steps.guard.outputs.apk_asset_name }}
+          NATIVE_ASSET_NAME: ${{ steps.guard.outputs.native_asset_name }}
+          NOTICES_ASSET_NAME: ${{ steps.guard.outputs.notices_asset_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets native-package
+          cp downloaded/apk/app-debug.apk "release-assets/$APK_ASSET_NAME"
+          cp -R downloaded/native/. native-package/
+          find native-package -type f -exec touch -t 198001010000 {} +
+          (cd native-package && find . -type f -print0 | sort -z | \
+            xargs -0 zip -X "$GITHUB_WORKSPACE/release-assets/$NATIVE_ASSET_NAME")
+
+          cp THIRD_PARTY_NOTICES.md "release-assets/$NOTICES_ASSET_NAME"
+          cp licenses/tun2socks-MIT.txt release-assets/tun2socks-MIT.txt
+          cp licenses/gvisor-LICENSE.txt release-assets/gvisor-LICENSE.txt
+          cp provenance/PROVENANCE.json release-assets/PROVENANCE.json
+
+          (
+            cd release-assets
+            sha256sum \
+              "$APK_ASSET_NAME" \
+              "$NATIVE_ASSET_NAME" \
+              "$NOTICES_ASSET_NAME" \
+              tun2socks-MIT.txt \
+              gvisor-LICENSE.txt \
+              PROVENANCE.json \
+              > CHECKSUMS.txt
+          )
+          test -s "release-assets/$APK_ASSET_NAME"
+          test -s "release-assets/$NATIVE_ASSET_NAME"
+          test -s release-assets/CHECKSUMS.txt
+
+      - name: Upload verified release bundle
+        if: steps.guard.outputs.skip != 'true' && steps.existing.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: guarded-prerelease-${{ steps.guard.outputs.tag }}-${{ steps.source.outputs.target_sha }}
+          path: release-assets
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create or verify prerelease
+        if: >-
+          steps.guard.outputs.skip != 'true' &&
+          steps.existing.outputs.skip != 'true' &&
+          steps.guard.outputs.publish_requested == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.source.outputs.target_sha }}
+          TAG_NAME: ${{ steps.guard.outputs.tag }}
+          RELEASE_TITLE: ${{ steps.guard.outputs.title }}
+          NOTES_PATH: ${{ steps.guard.outputs.notes_path }}
+          RELEASE_EXISTS: ${{ steps.existing.outputs.release_exists }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t expected_assets < <(find release-assets -maxdepth 1 -type f -printf '%f\n' | sort)
+
+          if [[ "$RELEASE_EXISTS" == 'true' ]]; then
+            test "$(gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq '.isPrerelease')" = 'true'
+            mapfile -t existing_assets < <(gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort)
+            comm -13 <(printf '%s\n' "${expected_assets[@]}") <(printf '%s\n' "${existing_assets[@]}") > unexpected-assets.txt
+            test ! -s unexpected-assets.txt
+
+            mkdir -p existing-release-assets
+            for asset_name in "${expected_assets[@]}"; do
+              if printf '%s\n' "${existing_assets[@]}" | grep -Fxq "$asset_name"; then
+                gh release download "$TAG_NAME" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --pattern "$asset_name" \
+                  --dir existing-release-assets
+                cmp -s "release-assets/$asset_name" "existing-release-assets/$asset_name"
+              else
+                gh release upload "$TAG_NAME" "release-assets/$asset_name" --repo "$GITHUB_REPOSITORY"
+              fi
+            done
+            gh release edit "$TAG_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$RELEASE_TITLE" \
+              --notes-file "$NOTES_PATH" \
+              --prerelease
+          else
+            gh release create "$TAG_NAME" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$TARGET_SHA" \
+              --title "$RELEASE_TITLE" \
+              --notes-file "$NOTES_PATH" \
+              --prerelease
+          fi
+
+      - name: Guard summary
+        if: always()
+        env:
+          TARGET_SHA: ${{ steps.source.outputs.target_sha }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
+          TAG_NAME: ${{ steps.guard.outputs.tag }}
+          SKIP_GUARD: ${{ steps.guard.outputs.skip }}
+          SKIP_EXISTING: ${{ steps.existing.outputs.skip }}
+          SKIP_REASON_GUARD: ${{ steps.guard.outputs.skip_reason }}
+          SKIP_REASON_EXISTING: ${{ steps.existing.outputs.skip_reason }}
+          PUBLISH_REQUESTED: ${{ steps.guard.outputs.publish_requested }}
+        shell: bash
+        run: |
+          {
+            echo '## ConnectX guarded prerelease'
+            echo
+            echo "- target SHA: \`${TARGET_SHA:-unresolved}\`"
+            echo "- Android CI run: \`${SOURCE_RUN_ID:-unresolved}\`"
+            echo "- tag: \`${TAG_NAME:-unresolved}\`"
+            echo "- publish requested: \`${PUBLISH_REQUESTED:-false}\`"
+            if [[ "${SKIP_GUARD:-false}" == 'true' ]]; then
+              echo "- skipped: ${SKIP_REASON_GUARD:-guard decision}"
+            elif [[ "${SKIP_EXISTING:-false}" == 'true' ]]; then
+              echo "- skipped: ${SKIP_REASON_EXISTING:-existing tag boundary}"
+            else
+              echo '- exact-commit provenance and release assets verified'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

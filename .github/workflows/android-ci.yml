@@ -1,4 +1,4 @@
-name: Android CI
+name: Android CT
 
 on:
   pull_request:
@@ -21,6 +21,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Verify guarded release manifest and negative tests
+        shell: bash
+        run: |
+          python3 -m unittest discover -s scripts/tests -p 'test_release_guard.py'
+          python3 scripts/release_guard.py validate-repo
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
