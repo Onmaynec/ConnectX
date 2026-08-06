@@ -1,0 +1,46 @@
+name: Patch alpha.6 completed-only assessment UI
+
+on:
+  push:
+    branches:
+      - feature/v0.3.0-alpha6
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v0.3.0-alpha6
+          token: ${{ github.token }}
+      - name: Hide assessment until terminal evidence exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('app/src/main/kotlin/dev/connectx/app/evidence/ExternalTlsEvidencePanel.kt')
+          text = path.read_text(encoding='utf-8')
+          old = '''    evidenceAssessmentLine(state),
+              evidenceRecommendationLine(state),
+          '''
+          new = '''    state.reason?.let { evidenceAssessmentLine(state) },
+              state.reason?.let { evidenceRecommendationLine(state) },
+          '''
+          if new in text:
+              raise SystemExit(0)
+          if old not in text:
+              raise SystemExit('assessment result anchor missing')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          git add app/src/main/kotlin/dev/connectx/app/evidence/ExternalTlsEvidencePanel.kt
+          git diff --cached --check
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(ui): show evidence quality only for completed results'
+          git push origin HEAD:feature/v0.3.0-alpha6
