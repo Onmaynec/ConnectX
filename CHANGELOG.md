@@ -10,6 +10,32 @@ All notable changes to ConnectX are documented in this file.
 - Physical-device repeated TUN lifecycle verification.
 - First strategy verified on a reproducible restricted network.
 
+## [0.3.0-alpha.5]
+
+### Added
+
+- One strict `release/prerelease.json` manifest for prerelease metadata.
+- Shared `workflow_run` publisher using the exact successful Android CI push commit and artifacts.
+- Manual dry-run/preflight with optional exact-SHA publication.
+- Dependency-free release guard with negative tests for wrong event, branch, SHA, tag, paths and stale documentation.
+- Deterministic native archive, `PROVENANCE.json` and SHA-256 release checksums.
+- Automatic consistency checks for application version, native bridge version, README and changelog.
+- Application version `0.3.0-alpha.5`, versionCode `12`.
+- Native bridge version `connectx-go-bridge/0.3.0-alpha.5`.
+
+### Changed
+
+- Version-specific publisher workflows are replaced by one guarded prerelease workflow.
+- Release artifacts are sourced only from a successful `Android CI` push-run on the same exact main commit.
+- Existing release assets are compared byte-for-byte and are never silently overwritten.
+
+### Safety boundaries
+
+- TUN capture remains limited to TEST-NET-1 (`192.0.2.0/24`).
+- Ordinary application traffic is not routed or modified.
+- No HTTP, credentials, MITM, certificate interception or HTTPS decryption is introduced.
+- Release hardening does not change the network strategy claim.
+
 ## [0.3.0-alpha.4]
 
 ### Added
