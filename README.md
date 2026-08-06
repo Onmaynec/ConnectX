@@ -10,11 +10,11 @@ ConnectX не является сервисом удалённого VPN и не
 
 ConnectX не выполняет MITM, не расшифровывает HTTPS, не устанавливает пользовательские сертификаты и не записывает содержимое трафика.
 
-## Текущая версия разработки: v0.3.0-alpha.4
+## Текущая версия разработки: v0.3.0-alpha.5
 
-Alpha.4 делает внешнюю TLS-проверку повторяемой и исправляет ключевое ограничение alpha.3. Теперь сервис всегда выполняет три baseline, три strategy и три recovery-соединения и способен распознать сценарий, где доступ появляется только при TLS ClientHello split.
+Alpha.5 сохраняет повторяемую TLS A/B/A-проверку alpha.4 и переводит выпуск prerelease на единый exact-commit pipeline. Версия приложения, native bridge, README, changelog и release manifest теперь проверяются одной автоматической guard-процедурой.
 
-### Проверка стратегии
+### Проверка TLS-стратегии
 
 Пользователь выбирает Telegram, YouTube, Discord или вводит собственный публичный hostname. Preset не обходит target policy: URL, IP, local/private адреса и смешанные DNS-ответы блокируются, порт фиксирован на 443.
 
@@ -36,14 +36,27 @@ Evaluator требует минимум два успеха и допускае�
 - стратегия восстановила недоступный baseline;
 - baseline был доступен и стратегия не ухудшила его;
 - стратегия не помогла;
-- блокировка baseline не воспроизвелась и сеть нестабильна;
+- ограничение baseline не воспроизвелось;
 - данных недостаточно.
 
 В интерфейсе показываются success/failure counters, median latency, TLS record kind, decision и reason. Обезличенный отчёт не содержит hostname, IPv4, payload, credentials или raw error text.
 
+### Единый guarded prerelease
+
+Файл [`release/prerelease.json`](release/prerelease.json) является единственным release manifest. После успешного `Android CI` push-run в `main` общий workflow:
+
+1. проверяет точное совпадение commit SHA, workflow, event и branch;
+2. подтверждает согласованность manifest, `versionCode`, `versionName`, native version, README и changelog;
+3. скачивает APK и native artifacts только из этого exact CI run;
+4. проверяет обе ABI, locked toolchain metadata и legal assets внутри APK;
+5. формирует deterministic native ZIP, `PROVENANCE.json` и `CHECKSUMS.txt`;
+6. создаёт prerelease либо подтверждает byte-identical повторный запуск.
+
+PR-run, failed CI, другая ветка или другой SHA не могут публиковать release. Ручной запуск по умолчанию работает как preflight без создания тега. Подробности: [`docs/operations/guarded-prerelease.md`](docs/operations/guarded-prerelease.md).
+
 ### Важное ограничение
 
-TUN по-прежнему перехватывает только `192.0.2.0/24`. Обычный трафик приложений не проходит через ConnectX. Два вызова `write()` не гарантируют два TCP-сегмента или IP-пакета. Положительный результат относится только к выбранной цели и текущей сети и не является универсальной гарантией обхода.
+TUN перехватывает только `192.0.2.0/24`. Обычный трафик приложений не проходит через ConnectX. Два вызова `write()` не гарантируют два TCP-сегмента или IP-пакета. Положительный результат относится только к выбранной цели и текущей сети и не является универсальной гарантией обхода.
 
 ## Модули
 
@@ -59,7 +72,7 @@ TUN по-прежнему перехватывает только `192.0.2.0/24`
 engine/go            source-built tun2socks/gVisor bridge
 ```
 
-## Сборка
+## Сборка и проверка
 
 Требования:
 
@@ -67,12 +80,27 @@ engine/go            source-built tun2socks/gVisor bridge
 - Go 1.26.3;
 - Android SDK 36;
 - Android NDK `28.0.13004108`;
-- Gradle 8.13.
+- Gradle 8.13;
+- Python 3 для release guard tests.
 
 ```bash
+python3 -m unittest discover -s scripts/tests -p 'test_release_guard.py'
+python3 scripts/release_guard.py validate-repo
 gradle --no-daemon test
 gradle --no-daemon lintDebug
 gradle --no-daemon :app:assembleDebug
+```
+
+Полная локальная проверка alpha.5:
+
+```bash
+scripts/verify-alpha5-local.sh --clean
+```
+
+Для Android runtime gates нужен уже запущенный Android 35 x86_64 emulator:
+
+```bash
+scripts/verify-alpha5-local.sh --clean --device
 ```
 
 Native bridge собирается скриптом:
@@ -81,23 +109,18 @@ Native bridge собирается скриптом:
 engine/go/build-android.sh "$ANDROID_SDK_ROOT/ndk/28.0.13004108"
 ```
 
-APK будет находиться в:
-
-```text
-app/build/outputs/apk/debug/app-debug.apk
-```
-
-GitHub Actions запускает Android 35 x86_64 emulator и выполняет изолированные gates:
+GitHub Actions выполняет изолированные gates:
 
 1. strategy foundation внутри установленного APK;
 2. TLS write-split Lab через foreground `VpnService` и TEST-NET TUN;
-3. A/B/A strategy evaluation, late stop, restart и active stop;
-4. JNI lifecycle;
-5. TCP path;
-6. UDP path;
-7. DNS path.
+3. A/B/A strategy evaluation;
+4. repeated external TLS evidence;
+5. JNI lifecycle;
+6. TCP path;
+7. UDP path;
+8. DNS path.
 
-Между сетевыми gates процесс приложения и VPN app-op сбрасываются, а каждый набор instrumentation-результатов сохраняется отдельно.
+Между сетевыми gates процесс приложения и VPN app-op сбрасываются, а instrumentation-результаты сохраняются отдельно.
 
 ## Roadmap
 
@@ -121,6 +144,4 @@ GitHub Actions запускает Android 35 x86_64 emulator и выполняе
 
 ## Статус релиза
 
-`v0.3.0-alpha.4` разрабатывается в отдельной feature-ветке и не считается выпущенной до успешного exact-head Android CI. Перед merge обязательны Go lock/bridge tests, JVM tests, lint, APK payload verification и все изолированные Android 35 x86_64 gates.
-
-Release workflow и одноразовый `.publish` marker входят в один проверяемый change set. После merge workflow повторно собирает и проверяет точный `main` commit, а затем создаёт prerelease только при полном успехе.
+`v0.3.0-alpha.5` публикуется только после полного Android CI на exact `main` commit. Отдельные version-specific publisher workflows больше не используются: release activation, provenance verification и идемпотентная публикация выполняются общим guarded workflow.

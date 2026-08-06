@@ -21,7 +21,7 @@ internal data class ExternalTlsEvidenceReportData(
 )
 
 internal fun buildRedactedEvidenceReport(data: ExternalTlsEvidenceReportData): String = buildString {
-    appendLine("ConnectX v0.3.0-alpha.4 — repeated TLS strategy evidence")
+    appendLine("ConnectX v0.3.0-alpha.5 — repeated TLS strategy evidence")
     appendLine("target_preset=${data.presetId}")
     appendLine("target=redacted-public-host:${data.targetPort ?: 443}")
     appendLine("route=TEST-NET-only")

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "publish": true,
+  "prerelease": true,
+  "version_name": "0.3.0-alpha.5",
+  "version_code": 12,
+  "tag": "v0.3.0-alpha.5",
+  "title": "ConnectX v0.3.0-alpha.5 — Unified Guarded Prerelease",
+  "notes_path": "docs/releases/v0.3.0-alpha.5.md",
+  "scope_path": "docs/roadmap/alpha5-scope.md",
+  "expected_ci_workflow": "Android CI",
+  "expected_ci_event": "push",
+  "expected_branch": "main"
+}
