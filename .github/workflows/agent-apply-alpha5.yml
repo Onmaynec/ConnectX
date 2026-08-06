@@ -16,7 +16,7 @@ jobs:
   apply:
     if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'feature/v0.3.0-alpha5'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - name: Checkout alpha.5 branch
         uses: actions/checkout@v4
@@ -25,41 +25,56 @@ jobs:
           fetch-depth: 2
           token: ${{ github.token }}
 
-      - name: Apply reviewed alpha.5 product patch
+      - name: Add alpha.5 changelog section
         shell: bash
         run: |
           set -euo pipefail
-          stage_dir='.github/alpha5-stage'
-          test -f "$stage_dir/part-00"
-          test -f "$stage_dir/part-01"
-          test -f "$stage_dir/part-02-0-00"
-          test -f "$stage_dir/part-02-0-01"
-          test -f "$stage_dir/part-02-0-02"
-          test -f "$stage_dir/part-02-0-03"
-          test -f "$stage_dir/part-02-1"
+          python3 - <<'PY'
+          from pathlib import Path
 
-          cat "$stage_dir"/part-* | tr -d '\r\n' > /tmp/alpha5.patch.gz.b64
-          echo '10c12853b2c33fd0e15a89a9c1a760ca248a21c882527694a16145fbfc347e0c  /tmp/alpha5.patch.gz.b64' | sha256sum -c -
-          base64 --decode /tmp/alpha5.patch.gz.b64 > /tmp/alpha5.patch.gz
-          echo 'cc116e43744b4f6b7d03a0fc3bba84b2516d1f34f4e6de569ba900b1ce1968ee  /tmp/alpha5.patch.gz' | sha256sum -c -
-          gzip -dc /tmp/alpha5.patch.gz > /tmp/alpha5.patch
-          echo 'e980f3133f82c5affadcc3e2763e0757554115c0045d9b7a312100034b6eade4  /tmp/alpha5.patch' | sha256sum -c -
+          path = Path('CHANGELOG.md')
+          text = path.read_text(encoding='utf-8')
+          if '## [0.3.0-alpha.5]' in text:
+              raise SystemExit(0)
+          marker = '## [0.3.0-alpha.4]'
+          if marker not in text:
+              raise SystemExit('alpha.4 marker not found')
+          section = '''## [0.3.0-alpha.5]
 
-          git apply --reject \
-            --exclude=README.md \
-            --exclude=CHANGELOG.md \
-            --exclude='.github/workflows/*' \
-            /tmp/alpha5.patch
-          test -z "$(find . -name '*.rej' -type f -print -quit)"
+          ### Added
 
-          git add -A -- \
-            ':(exclude).github/alpha5-stage/**' \
-            ':(exclude).github/workflows/agent-apply-alpha5.yml'
+          - One strict `release/prerelease.json` manifest for prerelease metadata.
+          - Shared `workflow_run` publisher using the exact successful Android CI push commit and artifacts.
+          - Manual dry-run/preflight with optional exact-SHA publication.
+          - Dependency-free release guard with negative tests for wrong event, branch, SHA, tag, paths and stale documentation.
+          - Deterministic native archive, `PROVENANCE.json` and SHA-256 release checksums.
+          - Automatic consistency checks for application version, native bridge version, README and changelog.
+          - Application version `0.3.0-alpha.5`, versionCode `12`.
+          - Native bridge version `connectx-go-bridge/0.3.0-alpha.5`.
+
+          ### Changed
+
+          - Version-specific publisher workflows are replaced by one guarded prerelease workflow.
+          - Release artifacts are sourced only from a successful `Android CI` push-run on the same exact main commit.
+          - Existing release assets are compared byte-for-byte and are never silently overwritten.
+
+          ### Safety boundaries
+
+          - TUN capture remains limited to TEST-NET-1 (`192.0.2.0/24`).
+          - Ordinary application traffic is not routed or modified.
+          - No HTTP, credentials, MITM, certificate interception or HTTPS decryption is introduced.
+          - Release hardening does not change the network strategy claim.
+
+          '''
+          path.write_text(text.replace(marker, section + marker, 1), encoding='utf-8')
+          PY
+
+          git add CHANGELOG.md
           git diff --cached --check
-          test -n "$(git diff --cached --name-only)"
-          test -z "$(git diff --cached --name-only | grep '^\.github/workflows/' || true)"
-
+          if git diff --cached --quiet; then
+            exit 0
+          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'feat: prepare ConnectX v0.3.0-alpha.5 product changes'
+          git commit -m 'docs: document ConnectX v0.3.0-alpha.5'
           git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
