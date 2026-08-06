@@ -10,74 +10,40 @@ ConnectX не является сервисом удалённого VPN и не
 
 ConnectX не выполняет MITM, не расшифровывает HTTPS, не устанавливает пользовательские сертификаты и не записывает содержимое трафика.
 
-## Текущая версия разработки: v0.3.0-alpha.2
+## Текущая версия разработки: v0.3.0-alpha.4
 
-Alpha.2 добавляет измеримый A/B/A health gate вокруг первой lab-only TLS write-split стратегии. Обычный пользовательский трафик по-прежнему не обрабатывается стратегией, а локальный результат не считается доказательством обхода DPI в реальной сети.
+Alpha.4 делает внешнюю TLS-проверку повторяемой и исправляет ключевое ограничение alpha.3. Теперь сервис всегда выполняет три baseline, три strategy и три recovery-соединения и способен распознать сценарий, где доступ появляется только при TLS ClientHello split.
 
-### Strategy API
+### Проверка стратегии
 
-Pure Kotlin модуль `:strategy:api` содержит:
-
-- типизированный `BypassStrategy` API;
-- capability model для TCP, UDP, IPv4, IPv6, TLS, QUIC и root;
-- immutable registry стратегий с уникальными идентификаторами;
-- глобальный feature gate, выключенный по умолчанию;
-- отдельные `LAB_ONLY` и `USER_TRAFFIC` scopes;
-- строгие причины отказа вместо скрытых fallback-заглушек;
-- bounded `StrategyHealthEvaluator` и immutable session gate.
-
-Первая стратегия `tls-clienthello-split-v1` принимает только ограниченный синтетический TLS ClientHello. Bounded inspector проверяет TLS record header, тип ClientHello, версии и длины record/handshake, максимальный размер и отсутствие trailing data. План обязан восстанавливать исходный payload байт-в-байт.
-
-### A/B/A Strategy Evaluation Lab
-
-После отдельного действия пользователя приложение выполняет три последовательные проверки одного синтетического ClientHello:
+Пользователь выбирает Telegram, YouTube, Discord или вводит собственный публичный hostname. Preset не обходит target policy: URL, IP, local/private адреса и смешанные DNS-ответы блокируются, порт фиксирован на 443.
 
 ```text
-A — BASELINE: one write()
-B — STRATEGY: two ordered writes from tls-clienthello-split-v1
-A — RECOVERY: one write()
+3 × BASELINE: one write()
+3 × STRATEGY: two ordered writes
+3 × RECOVERY: one write()
 
-Каждая фаза
-  → отдельное TCP-соединение
-  → exact endpoint 192.0.2.1:18444
-  → TEST-NET TUN
+каждое соединение
+  → 192.0.2.1:18445
+  → TEST-NET-only Android TUN
   → Go/gVisor + tun2socks
   → authenticated local SOCKS5 relay
-  → protected loopback echo endpoint
+  → protected pinned public IPv4:443
 ```
 
-Для каждой завершённой фазы проверяются:
+Evaluator требует минимум два успеха и допускает максимум одну ошибку на фазу. Он различает:
 
-- полное байтовое совпадение echo с исходным ClientHello;
-- отдельное relay-соединение;
-- ожидаемые upload/download byte deltas;
-- latency или типизированная причина ошибки.
+- стратегия восстановила недоступный baseline;
+- baseline был доступен и стратегия не ухудшила его;
+- стратегия не помогла;
+- блокировка baseline не воспроизвелась и сеть нестабильна;
+- данных недостаточно.
 
-Evaluator принимает решение только после baseline, strategy и recovery:
-
-- `KEEP_FOR_LAB_SESSION` — локальная проверка прошла в пределах latency budget;
-- `ROLLBACK_CONFIRMED` — baseline и recovery здоровы, а strategy сломалась или слишком замедлилась;
-- `REJECT_BASELINE_UNHEALTHY` — путь был нездоров ещё до strategy;
-- `REJECT_ENVIRONMENT_UNSTABLE` — recovery не восстановил здоровый путь;
-- `INCONCLUSIVE` — данных недостаточно.
-
-Фиксированная alpha.2 policy: одна обязательная успешная проба на фазу, ноль допустимых ошибок, максимум 50% относительной или 100 мс абсолютной регрессии и 60 секунд cooldown после rollback/reject/interruption.
-
-**Два вызова `write()` не гарантируют два TCP-сегмента или два IP-пакета на проводе.** Ядро ОС и userspace stack могут объединить данные. Alpha.2 проверяет planner, TUN integration, byte integrity, health comparison и rollback lifecycle, но не заявляет доказанную сетевую сегментацию или рабочий обход DPI.
-
-### Lifecycle hardening
-
-- stop/revoke/error закрывают client socket, native stack, TUN, relay и endpoint в generation-safe порядке;
-- поздний или повторный `ACTION_STOP` после успешного teardown идемпотентен;
-- завершённый `LAB_APPROVED` результат не превращается в искусственный cooldown из-за stale stop command;
-- cooldown применяется только при активной evaluation или незавершённом teardown;
-- Android regression gate проверяет late stop, немедленный explicit restart и active stop.
+В интерфейсе показываются success/failure counters, median latency, TLS record kind, decision и reason. Обезличенный отчёт не содержит hostname, IPv4, payload, credentials или raw error text.
 
 ### Важное ограничение
 
-TUN перехватывает только зарезервированную сеть `192.0.2.0/24`. A/B/A override разрешает только точную пару `192.0.2.1:18444` и перенаправляет её на process-local endpoint `127.0.0.1`.
-
-`0.0.0.0/0` и `::/0` не добавляются. Системные DNS-запросы и обычный интернет-трафик телефона не направляются в ConnectX. Внешний DNS resolver, IPv6, QUIC и DPI-модификация реальных соединений не включены.
+TUN по-прежнему перехватывает только `192.0.2.0/24`. Обычный трафик приложений не проходит через ConnectX. Два вызова `write()` не гарантируют два TCP-сегмента или IP-пакета. Положительный результат относится только к выбранной цели и текущей сети и не является универсальной гарантией обхода.
 
 ## Модули
 
@@ -155,6 +121,6 @@ GitHub Actions запускает Android 35 x86_64 emulator и выполняе
 
 ## Статус релиза
 
-PR `v0.3.0-alpha.2` остаётся stacked draft поверх `v0.3.0-alpha.1`. Слияние и публикация запрещены до успешной проверки Go lock, JVM tests, lint, APK payload и всех изолированных Android gates на точном commit.
+`v0.3.0-alpha.4` разрабатывается в отдельной feature-ветке и не считается выпущенной до успешного exact-head Android CI. Перед merge обязательны Go lock/bridge tests, JVM tests, lint, APK payload verification и все изолированные Android 35 x86_64 gates.
 
-Implementation merge только регистрирует guarded release workflow в `main`. Отдельный минимальный post-merge PR добавит `.publish` marker и активирует публикацию после успешного Android CI push run на том же release SHA.
+Release workflow и одноразовый `.publish` marker входят в один проверяемый change set. После merge workflow повторно собирает и проверяет точный `main` commit, а затем создаёт prerelease только при полном успехе.

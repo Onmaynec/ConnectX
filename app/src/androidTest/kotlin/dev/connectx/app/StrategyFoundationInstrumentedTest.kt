@@ -22,7 +22,7 @@ import org.junit.runner.RunWith
 class StrategyFoundationInstrumentedTest {
     @Test
     fun packagedStrategyIsDisabledByDefaultAndProducesLosslessLabPlanWhenExplicitlyEnabled() {
-        assertEquals("0.3.0-alpha.3", BuildConfig.VERSION_NAME)
+        assertEquals("0.3.0-alpha.4", BuildConfig.VERSION_NAME)
 
         val strategy = TlsClientHelloSplitStrategy()
         assertEquals(TlsClientHelloSplitStrategy.ID, strategy.descriptor.id)

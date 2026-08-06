@@ -10,6 +10,35 @@ All notable changes to ConnectX are documented in this file.
 - Physical-device repeated TUN lifecycle verification.
 - First strategy verified on a reproducible restricted network.
 
+## [0.3.0-alpha.4]
+
+### Added
+
+- Curated manual targets for Telegram, YouTube and Discord plus a validated custom hostname.
+- Three bounded samples for each BASELINE, STRATEGY and RECOVERY phase instead of one sample per phase.
+- Per-phase success/failure counters and median latency in the Compose result dialog and redacted report.
+- Restricted-baseline evaluation mode that can recognize a reproducible `baseline fail → strategy success → recovery fail` result.
+- Typed reasons `STRATEGY_RESTORED_RESTRICTED_BASELINE`, `RESTRICTED_BASELINE_NOT_REPRODUCED` and `STRATEGY_DID_NOT_RESTORE_RESTRICTED_BASELINE`.
+- Deterministic Android regression covering eighteen TLS flows across two explicit repeated sessions.
+- Application version `0.3.0-alpha.4`, versionCode `11`.
+- Native bridge version `connectx-go-bridge/0.3.0-alpha.4`.
+
+### Fixed
+
+- External evidence no longer cancels the strategy and recovery phases when the initial baseline is unavailable.
+- A restricted baseline is distinguished from an unstable network by requiring the recovery phase to reproduce the baseline result.
+- Target creation now uses a block body instead of a non-local return inside an expression body.
+- README and release documentation now describe the currently shipped alpha line rather than the obsolete alpha.2 workflow.
+
+### Safety boundaries
+
+- Client capture remains limited to TEST-NET-1 (`192.0.2.0/24`); no default IPv4 or IPv6 route is installed.
+- Ordinary application traffic is not routed or modified.
+- Each run uses one validated public hostname, one pinned public IPv4 and TCP/443 only.
+- Only a locally generated ClientHello and five response-header bytes are processed.
+- No HTTP, login, token, cookie, response body, certificate interception, MITM or user CA is used.
+- A positive result is repeated network-specific evidence, not a universal bypass claim.
+
 ## [0.3.0-alpha.3]
 
 ### Added

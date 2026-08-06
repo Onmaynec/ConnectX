@@ -128,16 +128,19 @@ data class ExternalTlsEvidenceTarget private constructor(
         private fun createTarget(
             normalizedHostname: String,
             address: Inet4Address,
-        ): TargetResolutionResult = TargetResolutionResult.Valid(
-            ExternalTlsEvidenceTarget(
-                hostname = normalizedHostname,
-                ipv4Address = address.hostAddress
-                    ?: return TargetResolutionResult.Rejected(
-                        TargetRejectionReason.NO_RESOLVED_ADDRESS,
-                    ),
-                port = TLS_PORT,
-            ),
-        )
+        ): TargetResolutionResult {
+            val hostAddress = address.hostAddress
+                ?: return TargetResolutionResult.Rejected(
+                    TargetRejectionReason.NO_RESOLVED_ADDRESS,
+                )
+            return TargetResolutionResult.Valid(
+                ExternalTlsEvidenceTarget(
+                    hostname = normalizedHostname,
+                    ipv4Address = hostAddress,
+                    port = TLS_PORT,
+                ),
+            )
+        }
 
         private fun isCanonicalHostname(value: String): Boolean {
             val validation = validateHostname(value)

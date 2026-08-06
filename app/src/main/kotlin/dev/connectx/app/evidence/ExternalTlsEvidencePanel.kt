@@ -3,9 +3,11 @@ package dev.connectx.app.evidence
 import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -21,6 +23,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import dev.connectx.strategy.api.ExternalTlsEvidencePreset
 
 enum class ExternalTlsEvidenceStatus {
     IDLE,
@@ -33,7 +36,8 @@ enum class ExternalTlsEvidenceStatus {
 }
 
 data class ExternalTlsEvidenceUiState(
-    val hostnameInput: String = "",
+    val hostnameInput: String = ExternalTlsEvidencePreset.TELEGRAM.hostname.orEmpty(),
+    val selectedPresetId: String = ExternalTlsEvidencePreset.TELEGRAM.id,
     val status: ExternalTlsEvidenceStatus = ExternalTlsEvidenceStatus.IDLE,
     val normalizedHostname: String? = null,
     val resolvedIpv4: String? = null,
@@ -44,6 +48,12 @@ data class ExternalTlsEvidenceUiState(
     val baselineRecordKind: String? = null,
     val strategyRecordKind: String? = null,
     val recoveryRecordKind: String? = null,
+    val baselineSuccesses: Int = 0,
+    val baselineFailures: Int = 0,
+    val strategySuccesses: Int = 0,
+    val strategyFailures: Int = 0,
+    val recoverySuccesses: Int = 0,
+    val recoveryFailures: Int = 0,
     val decision: String? = null,
     val reason: String? = null,
     val gateState: String? = null,
@@ -58,12 +68,11 @@ data class ExternalTlsEvidenceUiState(
         )
 
     val canExportRedactedReport: Boolean
-        get() = status == ExternalTlsEvidenceStatus.COMPLETED &&
-            decision != null &&
-            reason != null
+        get() = status == ExternalTlsEvidenceStatus.COMPLETED && decision != null && reason != null
 
     fun redactedReportText(): String = buildRedactedEvidenceReport(
         ExternalTlsEvidenceReportData(
+            presetId = selectedPresetId,
             targetPort = targetPort,
             baselineLatencyMillis = baselineLatencyMillis,
             strategyLatencyMillis = strategyLatencyMillis,
@@ -71,6 +80,12 @@ data class ExternalTlsEvidenceUiState(
             baselineRecordKind = baselineRecordKind,
             strategyRecordKind = strategyRecordKind,
             recoveryRecordKind = recoveryRecordKind,
+            baselineSuccesses = baselineSuccesses,
+            baselineFailures = baselineFailures,
+            strategySuccesses = strategySuccesses,
+            strategyFailures = strategyFailures,
+            recoverySuccesses = recoverySuccesses,
+            recoveryFailures = recoveryFailures,
             decision = decision,
             reason = reason,
             gateState = gateState,
@@ -82,6 +97,7 @@ data class ExternalTlsEvidenceUiState(
 fun ExternalTlsEvidencePanel(
     state: ExternalTlsEvidenceUiState,
     globalBusy: Boolean,
+    onPresetSelected: (ExternalTlsEvidencePreset) -> Unit,
     onHostnameChanged: (String) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
@@ -91,10 +107,7 @@ fun ExternalTlsEvidencePanel(
     val context = LocalContext.current
 
     LaunchedEffect(state.status) {
-        if (
-            state.status == ExternalTlsEvidenceStatus.COMPLETED ||
-            state.status == ExternalTlsEvidenceStatus.ERROR
-        ) {
+        if (state.status in setOf(ExternalTlsEvidenceStatus.COMPLETED, ExternalTlsEvidenceStatus.ERROR)) {
             dialogOpen = true
         }
     }
@@ -106,13 +119,13 @@ fun ExternalTlsEvidencePanel(
     ) {
         Text(
             text = when (state.status) {
-                ExternalTlsEvidenceStatus.REQUESTING_PERMISSION -> "TLS · разрешение"
-                ExternalTlsEvidenceStatus.STARTING -> "TLS · запуск"
-                ExternalTlsEvidenceStatus.RUNNING -> "TLS · A/B/A"
-                ExternalTlsEvidenceStatus.STOPPING -> "TLS · остановка"
-                ExternalTlsEvidenceStatus.COMPLETED -> "TLS · результат"
-                ExternalTlsEvidenceStatus.ERROR -> "TLS · ошибка"
-                ExternalTlsEvidenceStatus.IDLE -> "TLS evidence"
+                ExternalTlsEvidenceStatus.REQUESTING_PERMISSION -> "Стратегия · разрешение"
+                ExternalTlsEvidenceStatus.STARTING -> "Стратегия · запуск"
+                ExternalTlsEvidenceStatus.RUNNING -> "Стратегия · 3×A/B/A"
+                ExternalTlsEvidenceStatus.STOPPING -> "Стратегия · остановка"
+                ExternalTlsEvidenceStatus.COMPLETED -> "Стратегия · результат"
+                ExternalTlsEvidenceStatus.ERROR -> "Стратегия · ошибка"
+                ExternalTlsEvidenceStatus.IDLE -> "Проверить стратегию"
             },
         )
     }
@@ -120,20 +133,30 @@ fun ExternalTlsEvidencePanel(
     if (!dialogOpen) return
 
     AlertDialog(
-        onDismissRequest = {
-            if (!state.isBusy) dialogOpen = false
-        },
-        title = {
-            Text(
-                text = "Restricted-network TLS Evidence",
-                fontWeight = FontWeight.SemiBold,
-            )
-        },
+        onDismissRequest = { if (!state.isBusy) dialogOpen = false },
+        title = { Text("Проверка TLS-стратегии", fontWeight = FontWeight.SemiBold) },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                Text("Цель", style = MaterialTheme.typography.labelLarge)
+                presetRows.forEach { row ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        row.forEach { preset ->
+                            FilterChip(
+                                selected = state.selectedPresetId == preset.id,
+                                onClick = { onPresetSelected(preset) },
+                                enabled = !state.isBusy,
+                                label = { Text(preset.displayName) },
+                            )
+                        }
+                    }
+                }
+
                 OutlinedTextField(
                     value = state.hostnameInput,
                     onValueChange = onHostnameChanged,
@@ -142,9 +165,7 @@ fun ExternalTlsEvidencePanel(
                     label = { Text("Hostname") },
                     placeholder = { Text("example.org") },
                     singleLine = true,
-                    supportingText = {
-                        Text("Только hostname; порт всегда 443. URL и IP запрещены.")
-                    },
+                    supportingText = { Text("Один публичный hostname; TCP/443. URL и IP запрещены.") },
                 )
 
                 Text(
@@ -156,6 +177,10 @@ fun ExternalTlsEvidencePanel(
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
                 )
+
+                decisionText(state)?.let {
+                    Text(it, style = MaterialTheme.typography.titleSmall)
+                }
 
                 resultLines(state).forEach { line ->
                     Text(
@@ -173,22 +198,17 @@ fun ExternalTlsEvidencePanel(
                                 putExtra(Intent.EXTRA_TEXT, state.redactedReportText())
                             }
                             context.startActivity(
-                                Intent.createChooser(
-                                    shareIntent,
-                                    "Поделиться обезличенным отчётом",
-                                ),
+                                Intent.createChooser(shareIntent, "Поделиться обезличенным отчётом"),
                             )
                         },
                         modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Поделиться обезличенным отчётом")
-                    }
+                    ) { Text("Поделиться обезличенным отчётом") }
                 }
 
                 Text(
-                    text = "Проверка отправляет только локально созданный TLS ClientHello. " +
-                        "Она не отправляет HTTP-запрос, не входит в аккаунт, не читает тело ответа " +
-                        "и не расшифровывает HTTPS. Успех относится только к текущей сети.",
+                    text = "Alpha.4 выполняет по три попытки baseline, TLS split и recovery. " +
+                        "Она не отправляет HTTP, не входит в аккаунт, не читает тело ответа и " +
+                        "не расшифровывает HTTPS. Результат относится только к текущей сети.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Start,
@@ -197,63 +217,60 @@ fun ExternalTlsEvidencePanel(
         },
         confirmButton = {
             if (state.isBusy) {
-                OutlinedButton(
-                    onClick = onStop,
-                    enabled = state.status != ExternalTlsEvidenceStatus.STOPPING,
-                ) {
+                OutlinedButton(onClick = onStop, enabled = state.status != ExternalTlsEvidenceStatus.STOPPING) {
                     Text("Остановить")
                 }
             } else {
                 FilledTonalButton(
                     onClick = onStart,
                     enabled = state.hostnameInput.isNotBlank() && !globalBusy,
-                ) {
-                    Text("Запустить A/B/A")
-                }
+                ) { Text("Запустить 3×A/B/A") }
             }
         },
         dismissButton = {
-            OutlinedButton(
-                onClick = { dialogOpen = false },
-                enabled = !state.isBusy,
-            ) {
+            OutlinedButton(onClick = { dialogOpen = false }, enabled = !state.isBusy) {
                 Text("Закрыть")
             }
         },
     )
 }
 
+private val presetRows = listOf(
+    listOf(ExternalTlsEvidencePreset.TELEGRAM, ExternalTlsEvidencePreset.YOUTUBE),
+    listOf(ExternalTlsEvidencePreset.DISCORD, ExternalTlsEvidencePreset.CUSTOM),
+)
+
 private fun statusText(state: ExternalTlsEvidenceUiState): String = when (state.status) {
-    ExternalTlsEvidenceStatus.IDLE -> "Готово к ручной проверке."
+    ExternalTlsEvidenceStatus.IDLE -> "Готово к ручной проверке текущей сети."
     ExternalTlsEvidenceStatus.REQUESTING_PERMISSION -> "Ожидание системного VPN-разрешения."
     ExternalTlsEvidenceStatus.STARTING -> "Проверка hostname, DNS и запуск TEST-NET TUN."
-    ExternalTlsEvidenceStatus.RUNNING -> "Baseline → TLS split → recovery выполняются."
+    ExternalTlsEvidenceStatus.RUNNING -> "Три baseline → три TLS split → три recovery."
     ExternalTlsEvidenceStatus.STOPPING -> "Закрытие socket, native stack, TUN и relay."
-    ExternalTlsEvidenceStatus.COMPLETED -> "A/B/A evidence завершена."
+    ExternalTlsEvidenceStatus.COMPLETED -> "Повторная A/B/A-проверка завершена."
     ExternalTlsEvidenceStatus.ERROR -> state.error ?: "Проверка завершилась ошибкой."
 }
 
+private fun decisionText(state: ExternalTlsEvidenceUiState): String? = when (state.reason) {
+    "STRATEGY_RESTORED_RESTRICTED_BASELINE" ->
+        "Стратегия помогла: baseline и recovery недоступны, TLS split стабильно отвечает."
+    "PASSED_WITHIN_LATENCY_BUDGET" ->
+        "Соединение доступно и без стратегии; TLS split не ухудшил результат."
+    "STRATEGY_DID_NOT_RESTORE_RESTRICTED_BASELINE" ->
+        "Стратегия не помогла восстановить TLS-соединение."
+    "RESTRICTED_BASELINE_NOT_REPRODUCED" ->
+        "Сеть нестабильна: блокировка baseline не повторилась после стратегии."
+    "STRATEGY_LATENCY_REGRESSION", "STRATEGY_FAILURE_BUDGET_EXCEEDED" ->
+        "Стратегия ухудшила проверку; выполнен rollback."
+    else -> state.decision?.let { "Решение: $it" }
+}
+
 private fun resultLines(state: ExternalTlsEvidenceUiState): List<String> = listOfNotNull(
+    ExternalTlsEvidencePreset.fromId(state.selectedPresetId).displayName.let { "Цель: $it" },
     state.normalizedHostname?.let { "Hostname: $it" },
-    state.resolvedIpv4?.let { ip ->
-        "Pinned target: $ip:${state.targetPort ?: 443}"
-    },
-    phaseLine(
-        name = "Baseline",
-        latency = state.baselineLatencyMillis,
-        recordKind = state.baselineRecordKind,
-    ),
-    phaseLine(
-        name = "Strategy",
-        latency = state.strategyLatencyMillis,
-        recordKind = state.strategyRecordKind,
-    ),
-    phaseLine(
-        name = "Recovery",
-        latency = state.recoveryLatencyMillis,
-        recordKind = state.recoveryRecordKind,
-    ),
-    state.decision?.let { "Decision: $it" },
+    state.resolvedIpv4?.let { ip -> "Pinned target: $ip:${state.targetPort ?: 443}" },
+    phaseLine("Baseline", state.baselineLatencyMillis, state.baselineRecordKind, state.baselineSuccesses, state.baselineFailures),
+    phaseLine("Strategy", state.strategyLatencyMillis, state.strategyRecordKind, state.strategySuccesses, state.strategyFailures),
+    phaseLine("Recovery", state.recoveryLatencyMillis, state.recoveryRecordKind, state.recoverySuccesses, state.recoveryFailures),
     state.reason?.let { "Reason: $it" },
     state.gateState?.let { "Session gate: $it" },
 )
@@ -262,11 +279,15 @@ private fun phaseLine(
     name: String,
     latency: Long?,
     recordKind: String?,
+    successes: Int,
+    failures: Int,
 ): String? {
-    if (latency == null && recordKind == null) return null
+    if (latency == null && recordKind == null && successes == 0 && failures == 0) return null
     return listOfNotNull(
         name,
-        latency?.let { "$it мс" },
+        "успех $successes/3",
+        failures.takeIf { it > 0 }?.let { "ошибки $it" },
+        latency?.let { "median $it мс" },
         recordKind,
     ).joinToString(" · ")
 }

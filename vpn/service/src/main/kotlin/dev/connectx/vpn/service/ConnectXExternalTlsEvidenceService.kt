@@ -223,39 +223,31 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         Thread.sleep(ROUTE_SETTLE_MILLIS)
         checkEvidenceActive(expectedGeneration)
 
-        val baseline = runPhase(
+        val baseline = runPhaseSeries(
             expectedGeneration = expectedGeneration,
             payload = payload,
             segments = listOf(payload),
             writeGapMillis = 0L,
         )
-        val strategyPhase = if (baseline.sample is StrategyHealthSample.Success) {
-            runPhase(
-                expectedGeneration = expectedGeneration,
-                payload = payload,
-                segments = plan.segments,
-                writeGapMillis = STRATEGY_WRITE_GAP_MILLIS,
-            )
-        } else {
-            cancelledPhase()
-        }
-        val recovery = if (baseline.sample is StrategyHealthSample.Success) {
-            runPhase(
-                expectedGeneration = expectedGeneration,
-                payload = payload,
-                segments = listOf(payload),
-                writeGapMillis = 0L,
-            )
-        } else {
-            cancelledPhase()
-        }
+        val strategyPhase = runPhaseSeries(
+            expectedGeneration = expectedGeneration,
+            payload = payload,
+            segments = plan.segments,
+            writeGapMillis = STRATEGY_WRITE_GAP_MILLIS,
+        )
+        val recovery = runPhaseSeries(
+            expectedGeneration = expectedGeneration,
+            payload = payload,
+            segments = listOf(payload),
+            writeGapMillis = 0L,
+        )
 
         checkEvidenceActive(expectedGeneration)
         val report = StrategyHealthEvaluator(EVALUATION_POLICY).evaluate(
             strategyId = strategy.descriptor.id,
-            baselineSamples = listOf(baseline.sample),
-            strategySamples = listOf(strategyPhase.sample),
-            recoverySamples = listOf(recovery.sample),
+            baselineSamples = baseline.samples,
+            strategySamples = strategyPhase.samples,
+            recoverySamples = recovery.samples,
         )
         val gate = synchronized(GATE_LOCK) {
             processGate = processGate.complete(
@@ -368,7 +360,7 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
     }
 
     private fun establishTestTunnel(): ParcelFileDescriptor = Builder()
-        .setSession("ConnectX v0.3 external TLS evidence")
+        .setSession("ConnectX v0.3 alpha.4 TLS evidence")
         .setMtu(DEFAULT_MTU)
         .addAddress(LOCAL_TUN_ADDRESS, LOCAL_TUN_PREFIX)
         .addRoute(TEST_ROUTE, TEST_ROUTE_PREFIX)
@@ -413,7 +405,34 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         return version
     }
 
-    private fun runPhase(
+    private fun runPhaseSeries(
+        expectedGeneration: Long,
+        payload: ByteArray,
+        segments: List<ByteArray>,
+        writeGapMillis: Long,
+    ): EvidencePhaseOutcome {
+        val attempts = List(SAMPLES_PER_PHASE) {
+            runSinglePhase(
+                expectedGeneration = expectedGeneration,
+                payload = payload,
+                segments = segments,
+                writeGapMillis = writeGapMillis,
+            )
+        }
+        val successfulLatencies = attempts.mapNotNull { it.latencyMillis }.sorted()
+        val recordKinds = attempts.mapNotNull { it.recordKind }.distinct()
+        return EvidencePhaseOutcome(
+            samples = attempts.flatMap { it.samples },
+            latencyMillis = median(successfulLatencies),
+            uploadedBytes = attempts.sumOf { it.uploadedBytes },
+            downloadedBytes = attempts.sumOf { it.downloadedBytes },
+            relayConnections = attempts.sumOf { it.relayConnections },
+            recordKind = recordKinds.singleOrNull(),
+            error = attempts.firstNotNullOfOrNull { it.error },
+        )
+    }
+
+    private fun runSinglePhase(
         expectedGeneration: Long,
         payload: ByteArray,
         segments: List<ByteArray>,
@@ -428,7 +447,7 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
                 writeGapMillis = writeGapMillis,
             )
             EvidencePhaseOutcome(
-                sample = StrategyHealthSample.Success(exchange.latencyMillis),
+                samples = listOf(StrategyHealthSample.Success(exchange.latencyMillis)),
                 latencyMillis = exchange.latencyMillis,
                 uploadedBytes = exchange.uploadedBytes,
                 downloadedBytes = exchange.downloadedBytes,
@@ -437,9 +456,19 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
             )
         } catch (error: Throwable) {
             EvidencePhaseOutcome(
-                sample = StrategyHealthSample.Failure(classifyFailure(error)),
+                samples = listOf(StrategyHealthSample.Failure(classifyFailure(error))),
                 error = safePhaseError(error),
             )
+        }
+    }
+
+    private fun median(values: List<Long>): Long? {
+        if (values.isEmpty()) return null
+        val middle = values.size / 2
+        return if (values.size % 2 == 1) {
+            values[middle]
+        } else {
+            values[middle - 1] + ((values[middle] - values[middle - 1]) / 2L)
         }
     }
 
@@ -552,10 +581,6 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         }
         return stats
     }
-
-    private fun cancelledPhase(): EvidencePhaseOutcome = EvidencePhaseOutcome(
-        sample = StrategyHealthSample.Failure(StrategySampleFailure.CANCELLED),
-    )
 
     private fun checkGeneration(expectedGeneration: Long) {
         check(expectedGeneration == generation) {
@@ -770,6 +795,30 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
                     evidence.recovery.failureName,
                 )
                 putExtra(
+                    TunnelContract.EXTRA_EVIDENCE_BASELINE_SUCCESSES,
+                    evidence.baseline.successes,
+                )
+                putExtra(
+                    TunnelContract.EXTRA_EVIDENCE_BASELINE_FAILURES,
+                    evidence.baseline.failures,
+                )
+                putExtra(
+                    TunnelContract.EXTRA_EVIDENCE_STRATEGY_SUCCESSES,
+                    evidence.strategy.successes,
+                )
+                putExtra(
+                    TunnelContract.EXTRA_EVIDENCE_STRATEGY_FAILURES,
+                    evidence.strategy.failures,
+                )
+                putExtra(
+                    TunnelContract.EXTRA_EVIDENCE_RECOVERY_SUCCESSES,
+                    evidence.recovery.successes,
+                )
+                putExtra(
+                    TunnelContract.EXTRA_EVIDENCE_RECOVERY_FAILURES,
+                    evidence.recovery.failures,
+                )
+                putExtra(
                     TunnelContract.EXTRA_EVIDENCE_BASELINE_RECORD_KIND,
                     evidence.baseline.recordKind?.name,
                 )
@@ -892,7 +941,7 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
     )
 
     private data class EvidencePhaseOutcome(
-        val sample: StrategyHealthSample,
+        val samples: List<StrategyHealthSample>,
         val latencyMillis: Long? = null,
         val uploadedBytes: Long = 0L,
         val downloadedBytes: Long = 0L,
@@ -900,8 +949,18 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         val recordKind: TlsRecordKind? = null,
         val error: String? = null,
     ) {
+        val successes: Int
+            get() = samples.count { it is StrategyHealthSample.Success }
+        val failures: Int
+            get() = samples.count { it is StrategyHealthSample.Failure }
         val failureName: String?
-            get() = (sample as? StrategyHealthSample.Failure)?.reason?.name
+            get() = samples
+                .filterIsInstance<StrategyHealthSample.Failure>()
+                .groupingBy { it.reason }
+                .eachCount()
+                .maxByOrNull { it.value }
+                ?.key
+                ?.name
     }
 
     private data class ExternalTlsEvidenceResult(
@@ -932,11 +991,12 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         var processGate = StrategySessionGate()
 
         val EVALUATION_POLICY = StrategyEvaluationPolicy(
-            requiredSuccessesPerPhase = 1,
-            maxFailuresPerPhase = 0,
+            requiredSuccessesPerPhase = 2,
+            maxFailuresPerPhase = 1,
             maxLatencyRegressionPercent = 50,
             maxAbsoluteLatencyRegressionMillis = 250L,
             cooldownMillis = 60_000L,
+            allowRestrictedBaseline = true,
         )
 
         const val NOTIFICATION_CHANNEL_ID = "connectx_external_tls_evidence"
@@ -950,6 +1010,7 @@ class ConnectXExternalTlsEvidenceService : VpnService() {
         const val RELAY_HOST = "127.0.0.1"
         const val EVIDENCE_TEST_HOST = "192.0.2.1"
         const val EVIDENCE_TEST_PORT = 18_445
+        const val SAMPLES_PER_PHASE = 3
         const val PHASE_TIMEOUT_MILLIS = 6_000
         const val ROUTE_SETTLE_MILLIS = 300L
         const val STRATEGY_WRITE_GAP_MILLIS = 25L

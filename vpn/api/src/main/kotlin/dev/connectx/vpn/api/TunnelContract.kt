@@ -52,6 +52,18 @@ object TunnelContract {
         "dev.connectx.extra.EVIDENCE_STRATEGY_RECORD_KIND"
     const val EXTRA_EVIDENCE_RECOVERY_RECORD_KIND =
         "dev.connectx.extra.EVIDENCE_RECOVERY_RECORD_KIND"
+    const val EXTRA_EVIDENCE_BASELINE_SUCCESSES =
+        "dev.connectx.extra.EVIDENCE_BASELINE_SUCCESSES"
+    const val EXTRA_EVIDENCE_BASELINE_FAILURES =
+        "dev.connectx.extra.EVIDENCE_BASELINE_FAILURES"
+    const val EXTRA_EVIDENCE_STRATEGY_SUCCESSES =
+        "dev.connectx.extra.EVIDENCE_STRATEGY_SUCCESSES"
+    const val EXTRA_EVIDENCE_STRATEGY_FAILURES =
+        "dev.connectx.extra.EVIDENCE_STRATEGY_FAILURES"
+    const val EXTRA_EVIDENCE_RECOVERY_SUCCESSES =
+        "dev.connectx.extra.EVIDENCE_RECOVERY_SUCCESSES"
+    const val EXTRA_EVIDENCE_RECOVERY_FAILURES =
+        "dev.connectx.extra.EVIDENCE_RECOVERY_FAILURES"
 
     // Honored only when the installed application is debuggable. Release builds
     // reject these values before opening any relay or TUN resource.
