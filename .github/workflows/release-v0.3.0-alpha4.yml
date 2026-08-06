@@ -72,13 +72,12 @@ jobs:
           test "$(jq -r '.headSha' <<<"$run_json")" = "$SOURCE_HEAD_SHA"
           test "$(jq -r '.headBranch' <<<"$run_json")" = "$SOURCE_BRANCH"
 
-          compare_json="$(gh api "repos/$GITHUB_REPOSITORY/compare/$SOURCE_HEAD_SHA...$TARGET_SHA")"
-          jq -e '
-            ([.files[].filename] | sort) == [
-              ".github/workflows/release-v0.3.0-alpha4.yml",
-              "docs/releases/v0.3.0-alpha.4.publish"
-            ]
-          ' <<<"$compare_json" >/dev/null
+          git fetch --no-tags --depth=1 origin "$SOURCE_HEAD_SHA"
+          git diff --name-only "$SOURCE_HEAD_SHA" "$TARGET_SHA" | sort > source-tree-changed-files.txt
+          diff -u <(printf '%s\n' \
+            '.github/workflows/release-v0.3.0-alpha4.yml' \
+            'docs/releases/v0.3.0-alpha.4.publish') \
+            source-tree-changed-files.txt
 
       - name: Download exact successful Android CI artifacts
         env:
