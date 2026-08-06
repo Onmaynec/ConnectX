@@ -45,18 +45,12 @@ jobs:
           gzip -dc /tmp/alpha5.patch.gz > /tmp/alpha5.patch
           echo 'e980f3133f82c5affadcc3e2763e0757554115c0045d9b7a312100034b6eade4  /tmp/alpha5.patch' | sha256sum -c -
 
-          set +e
           git apply --reject --exclude=README.md --exclude=CHANGELOG.md /tmp/alpha5.patch
-          apply_status=$?
-          set -e
-          echo "git apply status: $apply_status"
-          find . -name '*.rej' -type f -print | sort | tee /tmp/alpha5-rejects.txt
-          rm -f $(cat /tmp/alpha5-rejects.txt) 2>/dev/null || true
+          test -z "$(find . -name '*.rej' -type f -print -quit)"
           rm -rf "$stage_dir" .github/workflows/agent-apply-alpha5.yml
 
           git add -A
           git diff --cached --check
-          test -z "$(git diff --cached --name-only | grep -E '^\.github/alpha5-stage/|^\.github/workflows/agent-apply-alpha5\.yml$' || true)"
           test -n "$(git diff --cached --name-only)"
 
           git config user.name 'github-actions[bot]'
