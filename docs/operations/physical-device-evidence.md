@@ -20,6 +20,8 @@ Alpha.7 подготавливает воспроизводимую провер
 
 После успешного teardown процесс считается warmed. Перед второй и третьей сессиями снимается новый FD baseline, а после teardown проверяется delta. Бюджет остаётся равным `4` и не увеличивается для маскировки cold-start или повторяемого роста ресурсов.
 
+Для отладки превышения CI пишет только агрегированные категории `socket`, `pipe`, `anon_inode`, `device`, `file` и `other`. Ссылки `/proc/self/fd`, пути файлов и назначения сокетов не сохраняются и не попадают в shareable report или bundle.
+
 Collector не записывает serial, model, manufacturer, fingerprint, SSID, hostname, IPv4 или содержимое трафика. Raw Gradle/ADB output не включается в shareable bundle.
 
 ## Подготовка
