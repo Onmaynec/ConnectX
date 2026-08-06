@@ -792,7 +792,31 @@ class ConnectXTunnelService : VpnService() {
 
         nativeVersion = null
         activeMode = TunnelContract.MODE_FOUNDATION
-        return firstError
+        return normalizeCleanupError(firstError)
+    }
+
+    /**
+     * Relay and echo workers remove sockets concurrently while shutdown
+     * closes the same bounded registries. Android/Kotlin collections can
+     * report NoSuchElementException after the resource was already removed.
+     * It is benign only when the native bridge confirms the stop postcondition.
+     */
+    private fun normalizeCleanupError(error: Throwable?): Throwable? {
+        if (error == null || !error.hasNoSuchElementCause()) return error
+        val nativeStopped = runCatching { !NativeTunBridge.isRunning() }
+            .getOrDefault(false)
+        return if (nativeStopped) null else error
+    }
+
+    private fun Throwable.hasNoSuchElementCause(): Boolean {
+        var current: Throwable? = this
+        var depth = 0
+        while (current != null && depth < 8) {
+            if (current is NoSuchElementException) return true
+            current = current.cause
+            depth += 1
+        }
+        return false
     }
 
     private fun buildFailureMessage(
