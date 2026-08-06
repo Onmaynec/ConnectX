@@ -1,3 +1,3 @@
 Publish ConnectX v0.3.0-alpha.4 from the immutable successful Android CI run 31078949278.
 
-The publisher must verify the source commit, branch, workflow result, product-tree equivalence, APK and native SHA-256 values, legal payloads and final main commit before creating the prerelease.
+The publisher verifies source and final trees directly, allowing only this marker and its workflow to differ. It must also verify CI identity, APK/native SHA-256 values and legal payloads before creating the prerelease.
