@@ -1,0 +1,252 @@
+name: Apply alpha.6 evidence quality gate
+
+on:
+  push:
+    branches:
+      - feature/v0.3.0-alpha6
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-alpha6-evidence-quality
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/v0.3.0-alpha6
+          fetch-depth: 2
+          token: ${{ github.token }}
+
+      - name: Apply deterministic alpha.6 change set
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import shutil
+
+          OLD_VERSION = "0.3.0-alpha.5"
+          MARKER = Path("strategy/api/src/main/kotlin/dev/connectx/strategy/api/ExternalTlsEvidenceAssessment.kt")
+          if MARKER.is_file():
+              print("Alpha.6 change set already applied")
+              raise SystemExit(0)
+          NEW_VERSION = "0.3.0-alpha.6"
+
+          def read(path):
+              return Path(path).read_text(encoding="utf-8")
+
+          def write(path, content):
+              target = Path(path)
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_text(content, encoding="utf-8")
+
+          def replace_once(path, old, new):
+              text = read(path)
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one occurrence, found {count}")
+              write(path, text.replace(old, new, 1))
+
+          def replace_all_in(path, old, new):
+              text = read(path)
+              if old not in text:
+                  return False
+              write(path, text.replace(old, new))
+              return True
+
+          for directory in ("app", "strategy", "vpn", "engine/go/bridge"):
+              for path in Path(directory).rglob("*"):
+                  if path.is_file() and path.suffix in {".kt", ".kts", ".go"}:
+                      replace_all_in(path, OLD_VERSION, NEW_VERSION)
+                      replace_all_in(path, "v0.3 alpha.5", "v0.3 alpha.6")
+
+          replace_once("app/build.gradle.kts", "versionCode = 12", "versionCode = 13")
+
+          guard_test = "scripts/tests/test_release_guard.py"
+          replace_all_in(guard_test, OLD_VERSION, NEW_VERSION)
+          replace_all_in(guard_test, '"version_code": 12', '"version_code": 13')
+          replace_all_in(guard_test, "versionCode = 12", "versionCode = 13")
+          replace_all_in(guard_test, "alpha5-scope.md", "alpha6-scope.md")
+
+          write(
+              "strategy/api/src/main/kotlin/dev/connectx/strategy/api/ExternalTlsEvidenceAssessment.kt",
+              "package dev.connectx.strategy.api\n\nenum class ExternalTlsEvidenceClass {\n    STRATEGY_HELP_CONFIRMED,\n    AVAILABLE_WITHOUT_STRATEGY,\n    STRATEGY_NOT_HELPFUL,\n    INCONCLUSIVE,\n}\n\nenum class ExternalTlsEvidenceConfidence {\n    HIGH,\n    MEDIUM,\n    LOW,\n}\n\nenum class ExternalTlsEvidenceRecommendation {\n    ATTACH_FOR_MANUAL_REVIEW,\n    STRATEGY_NOT_REQUIRED,\n    KEEP_STRATEGY_DISABLED,\n    REPEAT_ON_SAME_NETWORK,\n}\n\ndata class ExternalTlsEvidenceSampleSummary(\n    val samplesPerPhase: Int = 3,\n    val baselineSuccesses: Int,\n    val baselineFailures: Int,\n    val strategySuccesses: Int,\n    val strategyFailures: Int,\n    val recoverySuccesses: Int,\n    val recoveryFailures: Int,\n    val decision: String?,\n    val reason: String?,\n)\n\ndata class ExternalTlsEvidenceAssessment(\n    val evidenceClass: ExternalTlsEvidenceClass,\n    val confidence: ExternalTlsEvidenceConfidence,\n    val recommendation: ExternalTlsEvidenceRecommendation,\n)\n\nobject ExternalTlsEvidenceAssessor {\n    fun assess(summary: ExternalTlsEvidenceSampleSummary): ExternalTlsEvidenceAssessment {\n        if (!summary.hasCompleteValidSamples()) {\n            return ExternalTlsEvidenceAssessment(\n                evidenceClass = ExternalTlsEvidenceClass.INCONCLUSIVE,\n                confidence = ExternalTlsEvidenceConfidence.LOW,\n                recommendation = ExternalTlsEvidenceRecommendation.REPEAT_ON_SAME_NETWORK,\n            )\n        }\n\n        val quorum = (summary.samplesPerPhase / 2) + 1\n        return when (summary.reason) {\n            REASON_STRATEGY_RESTORED_RESTRICTED_BASELINE -> {\n                val exact = summary.baselineFailures == summary.samplesPerPhase &&\n                    summary.strategySuccesses == summary.samplesPerPhase &&\n                    summary.recoveryFailures == summary.samplesPerPhase\n                val consistent = summary.baselineFailures >= quorum &&\n                    summary.strategySuccesses >= quorum &&\n                    summary.recoveryFailures >= quorum\n\n                if (consistent) {\n                    ExternalTlsEvidenceAssessment(\n                        evidenceClass = ExternalTlsEvidenceClass.STRATEGY_HELP_CONFIRMED,\n                        confidence = if (exact) {\n                            ExternalTlsEvidenceConfidence.HIGH\n                        } else {\n                            ExternalTlsEvidenceConfidence.MEDIUM\n                        },\n                        recommendation = ExternalTlsEvidenceRecommendation.ATTACH_FOR_MANUAL_REVIEW,\n                    )\n                } else {\n                    inconclusive()\n                }\n            }\n\n            REASON_PASSED_WITHIN_LATENCY_BUDGET -> {\n                val available = summary.baselineSuccesses >= quorum &&\n                    summary.strategySuccesses >= quorum &&\n                    summary.recoverySuccesses >= quorum\n                if (available) {\n                    ExternalTlsEvidenceAssessment(\n                        evidenceClass = ExternalTlsEvidenceClass.AVAILABLE_WITHOUT_STRATEGY,\n                        confidence = if (\n                            summary.baselineSuccesses == summary.samplesPerPhase &&\n                            summary.strategySuccesses == summary.samplesPerPhase &&\n                            summary.recoverySuccesses == summary.samplesPerPhase\n                        ) {\n                            ExternalTlsEvidenceConfidence.HIGH\n                        } else {\n                            ExternalTlsEvidenceConfidence.MEDIUM\n                        },\n                        recommendation = ExternalTlsEvidenceRecommendation.STRATEGY_NOT_REQUIRED,\n                    )\n                } else {\n                    inconclusive()\n                }\n            }\n\n            REASON_STRATEGY_DID_NOT_RESTORE_RESTRICTED_BASELINE,\n            REASON_STRATEGY_LATENCY_REGRESSION,\n            REASON_STRATEGY_FAILURE_BUDGET_EXCEEDED,\n            -> ExternalTlsEvidenceAssessment(\n                evidenceClass = ExternalTlsEvidenceClass.STRATEGY_NOT_HELPFUL,\n                confidence = ExternalTlsEvidenceConfidence.HIGH,\n                recommendation = ExternalTlsEvidenceRecommendation.KEEP_STRATEGY_DISABLED,\n            )\n\n            REASON_RESTRICTED_BASELINE_NOT_REPRODUCED -> ExternalTlsEvidenceAssessment(\n                evidenceClass = ExternalTlsEvidenceClass.INCONCLUSIVE,\n                confidence = ExternalTlsEvidenceConfidence.MEDIUM,\n                recommendation = ExternalTlsEvidenceRecommendation.REPEAT_ON_SAME_NETWORK,\n            )\n\n            else -> inconclusive()\n        }\n    }\n\n    private fun ExternalTlsEvidenceSampleSummary.hasCompleteValidSamples(): Boolean {\n        if (samplesPerPhase <= 0) return false\n        val values = listOf(\n            baselineSuccesses,\n            baselineFailures,\n            strategySuccesses,\n            strategyFailures,\n            recoverySuccesses,\n            recoveryFailures,\n        )\n        if (values.any { it < 0 || it > samplesPerPhase }) return false\n        return baselineSuccesses + baselineFailures == samplesPerPhase &&\n            strategySuccesses + strategyFailures == samplesPerPhase &&\n            recoverySuccesses + recoveryFailures == samplesPerPhase\n    }\n\n    private fun inconclusive() = ExternalTlsEvidenceAssessment(\n        evidenceClass = ExternalTlsEvidenceClass.INCONCLUSIVE,\n        confidence = ExternalTlsEvidenceConfidence.LOW,\n        recommendation = ExternalTlsEvidenceRecommendation.REPEAT_ON_SAME_NETWORK,\n    )\n\n    private const val REASON_STRATEGY_RESTORED_RESTRICTED_BASELINE =\n        \"STRATEGY_RESTORED_RESTRICTED_BASELINE\"\n    private const val REASON_PASSED_WITHIN_LATENCY_BUDGET =\n        \"PASSED_WITHIN_LATENCY_BUDGET\"\n    private const val REASON_STRATEGY_DID_NOT_RESTORE_RESTRICTED_BASELINE =\n        \"STRATEGY_DID_NOT_RESTORE_RESTRICTED_BASELINE\"\n    private const val REASON_RESTRICTED_BASELINE_NOT_REPRODUCED =\n        \"RESTRICTED_BASELINE_NOT_REPRODUCED\"\n    private const val REASON_STRATEGY_LATENCY_REGRESSION =\n        \"STRATEGY_LATENCY_REGRESSION\"\n    private const val REASON_STRATEGY_FAILURE_BUDGET_EXCEEDED =\n        \"STRATEGY_FAILURE_BUDGET_EXCEEDED\"\n}\n",
+          )
+          write(
+              "strategy/api/src/test/kotlin/dev/connectx/strategy/api/ExternalTlsEvidenceAssessorTest.kt",
+              "package dev.connectx.strategy.api\n\nimport org.junit.Assert.assertEquals\nimport org.junit.Test\n\nclass ExternalTlsEvidenceAssessorTest {\n    @Test\n    fun exactRestrictedPatternIsHighConfidenceConfirmedHelp() {\n        val result = ExternalTlsEvidenceAssessor.assess(\n            summary(\n                baselineSuccesses = 0,\n                baselineFailures = 3,\n                strategySuccesses = 3,\n                strategyFailures = 0,\n                recoverySuccesses = 0,\n                recoveryFailures = 3,\n                reason = \"STRATEGY_RESTORED_RESTRICTED_BASELINE\",\n            ),\n        )\n\n        assertEquals(ExternalTlsEvidenceClass.STRATEGY_HELP_CONFIRMED, result.evidenceClass)\n        assertEquals(ExternalTlsEvidenceConfidence.HIGH, result.confidence)\n        assertEquals(\n            ExternalTlsEvidenceRecommendation.ATTACH_FOR_MANUAL_REVIEW,\n            result.recommendation,\n        )\n    }\n\n    @Test\n    fun mixedButQuorumRestrictedPatternIsMediumConfidence() {\n        val result = ExternalTlsEvidenceAssessor.assess(\n            summary(\n                baselineSuccesses = 1,\n                baselineFailures = 2,\n                strategySuccesses = 2,\n                strategyFailures = 1,\n                recoverySuccesses = 1,\n                recoveryFailures = 2,\n                reason = \"STRATEGY_RESTORED_RESTRICTED_BASELINE\",\n            ),\n        )\n\n        assertEquals(ExternalTlsEvidenceClass.STRATEGY_HELP_CONFIRMED, result.evidenceClass)\n        assertEquals(ExternalTlsEvidenceConfidence.MEDIUM, result.confidence)\n    }\n\n    @Test\n    fun availableBaselineDoesNotClaimStrategyHelp() {\n        val result = ExternalTlsEvidenceAssessor.assess(\n            summary(\n                baselineSuccesses = 3,\n                baselineFailures = 0,\n                strategySuccesses = 3,\n                strategyFailures = 0,\n                recoverySuccesses = 3,\n                recoveryFailures = 0,\n                reason = \"PASSED_WITHIN_LATENCY_BUDGET\",\n            ),\n        )\n\n        assertEquals(ExternalTlsEvidenceClass.AVAILABLE_WITHOUT_STRATEGY, result.evidenceClass)\n        assertEquals(\n            ExternalTlsEvidenceRecommendation.STRATEGY_NOT_REQUIRED,\n            result.recommendation,\n        )\n    }\n\n    @Test\n    fun regressionKeepsStrategyDisabled() {\n        val result = ExternalTlsEvidenceAssessor.assess(\n            summary(\n                baselineSuccesses = 3,\n                baselineFailures = 0,\n                strategySuccesses = 1,\n                strategyFailures = 2,\n                recoverySuccesses = 3,\n                recoveryFailures = 0,\n                reason = \"STRATEGY_LATENCY_REGRESSION\",\n            ),\n        )\n\n        assertEquals(ExternalTlsEvidenceClass.STRATEGY_NOT_HELPFUL, result.evidenceClass)\n        assertEquals(\n            ExternalTlsEvidenceRecommendation.KEEP_STRATEGY_DISABLED,\n            result.recommendation,\n        )\n    }\n\n    @Test\n    fun incompleteSamplesAreAlwaysInconclusive() {\n        val result = ExternalTlsEvidenceAssessor.assess(\n            summary(\n                baselineSuccesses = 0,\n                baselineFailures = 2,\n                strategySuccesses = 3,\n                strategyFailures = 0,\n                recoverySuccesses = 0,\n                recoveryFailures = 3,\n                reason = \"STRATEGY_RESTORED_RESTRICTED_BASELINE\",\n            ),\n        )\n\n        assertEquals(ExternalTlsEvidenceClass.INCONCLUSIVE, result.evidenceClass)\n        assertEquals(ExternalTlsEvidenceConfidence.LOW, result.confidence)\n        assertEquals(\n            ExternalTlsEvidenceRecommendation.REPEAT_ON_SAME_NETWORK,\n            result.recommendation,\n        )\n    }\n\n    private fun summary(\n        baselineSuccesses: Int,\n        baselineFailures: Int,\n        strategySuccesses: Int,\n        strategyFailures: Int,\n        recoverySuccesses: Int,\n        recoveryFailures: Int,\n        reason: String,\n    ) = ExternalTlsEvidenceSampleSummary(\n        baselineSuccesses = baselineSuccesses,\n        baselineFailures = baselineFailures,\n        strategySuccesses = strategySuccesses,\n        strategyFailures = strategyFailures,\n        recoverySuccesses = recoverySuccesses,\n        recoveryFailures = recoveryFailures,\n        decision = \"TEST_DECISION\",\n        reason = reason,\n    )\n}\n",
+          )
+          write(
+              "app/src/main/kotlin/dev/connectx/app/evidence/ExternalTlsEvidenceReport.kt",
+              "package dev.connectx.app.evidence\n\nimport dev.connectx.strategy.api.ExternalTlsEvidenceAssessor\nimport dev.connectx.strategy.api.ExternalTlsEvidenceSampleSummary\nimport java.security.MessageDigest\n\ninternal data class ExternalTlsEvidenceReportData(\n    val presetId: String,\n    val targetPort: Int?,\n    val baselineLatencyMillis: Long?,\n    val strategyLatencyMillis: Long?,\n    val recoveryLatencyMillis: Long?,\n    val baselineRecordKind: String?,\n    val strategyRecordKind: String?,\n    val recoveryRecordKind: String?,\n    val baselineSuccesses: Int,\n    val baselineFailures: Int,\n    val strategySuccesses: Int,\n    val strategyFailures: Int,\n    val recoverySuccesses: Int,\n    val recoveryFailures: Int,\n    val decision: String?,\n    val reason: String?,\n    val gateState: String?,\n)\n\ninternal fun buildRedactedEvidenceReport(data: ExternalTlsEvidenceReportData): String {\n    val summary = data.toSampleSummary()\n    val assessment = ExternalTlsEvidenceAssessor.assess(summary)\n    val reportId = buildReportId(data, assessment.evidenceClass.name, assessment.confidence.name)\n    val report = buildString {\n        appendLine(\"ConnectX v0.3.0-alpha.6 — TLS strategy evidence report\")\n        appendLine(\"schema_version=2\")\n        appendLine(\"report_id=$reportId\")\n        appendLine(\"target_preset=${data.presetId}\")\n        appendLine(\"target=redacted-public-host:${data.targetPort ?: 443}\")\n        appendLine(\"route=TEST-NET-only\")\n        appendLine(\"transport=TCP\")\n        appendLine(\"tls_payload=ClientHello-only\")\n        appendLine(\"samples_per_phase=3\")\n        appendLine(\n            \"baseline=\" +\n                phaseReport(\n                    data.baselineLatencyMillis,\n                    data.baselineRecordKind,\n                    data.baselineSuccesses,\n                    data.baselineFailures,\n                ),\n        )\n        appendLine(\n            \"strategy=\" +\n                phaseReport(\n                    data.strategyLatencyMillis,\n                    data.strategyRecordKind,\n                    data.strategySuccesses,\n                    data.strategyFailures,\n                ),\n        )\n        appendLine(\n            \"recovery=\" +\n                phaseReport(\n                    data.recoveryLatencyMillis,\n                    data.recoveryRecordKind,\n                    data.recoverySuccesses,\n                    data.recoveryFailures,\n                ),\n        )\n        appendLine(\"evidence_class=${assessment.evidenceClass.name}\")\n        appendLine(\"confidence=${assessment.confidence.name}\")\n        appendLine(\"recommendation=${assessment.recommendation.name}\")\n        appendLine(\"decision=${data.decision ?: \"UNKNOWN\"}\")\n        appendLine(\"reason=${data.reason ?: \"UNKNOWN\"}\")\n        appendLine(\"gate=${data.gateState ?: \"UNKNOWN\"}\")\n        appendLine(\"hostname=REDACTED\")\n        appendLine(\"resolved_ipv4=REDACTED\")\n        append(\"claim=network-specific-repeated-evidence-not-universal-bypass\")\n    }\n\n    val violations = validateRedactedEvidenceReport(report)\n    check(violations.isEmpty()) {\n        \"Generated evidence report violated its schema: ${violations.joinToString()}\"\n    }\n    return report\n}\n\ninternal fun validateRedactedEvidenceReport(report: String): List<String> {\n    val violations = mutableListOf<String>()\n    if (report.length > MAX_REPORT_CHARS) violations += \"report-too-large\"\n    if ('\\r' in report || '\\u0000' in report) violations += \"invalid-control-character\"\n\n    val lines = report.lines()\n    if (lines.firstOrNull() != REPORT_HEADER) violations += \"invalid-header\"\n\n    val entries = linkedMapOf<String, String>()\n    lines.drop(1).forEach { line ->\n        val separator = line.indexOf('=')\n        if (separator <= 0) {\n            violations += \"invalid-line\"\n            return@forEach\n        }\n        val key = line.substring(0, separator)\n        val value = line.substring(separator + 1)\n        if (key !in ALLOWED_KEYS) violations += \"unknown-key:$key\"\n        if (entries.put(key, value) != null) violations += \"duplicate-key:$key\"\n    }\n\n    if (entries.keys != ALLOWED_KEYS) {\n        violations += \"schema-keys-mismatch\"\n    }\n    if (entries[\"schema_version\"] != \"2\") violations += \"invalid-schema-version\"\n    if (entries[\"hostname\"] != \"REDACTED\") violations += \"hostname-not-redacted\"\n    if (entries[\"resolved_ipv4\"] != \"REDACTED\") violations += \"ipv4-not-redacted\"\n    if (!entries[\"target\"].orEmpty().matches(Regex(\"\"\"redacted-public-host:\\d{1,5}\"\"\"))) {\n        violations += \"invalid-redacted-target\"\n    }\n    if (!entries[\"report_id\"].orEmpty().matches(Regex(\"\"\"[0-9a-f]{24}\"\"\"))) {\n        violations += \"invalid-report-id\"\n    }\n\n    if (IPV4_REGEX.containsMatchIn(report)) violations += \"raw-ipv4\"\n    val lowercase = report.lowercase()\n    FORBIDDEN_FRAGMENTS.forEach { fragment ->\n        if (fragment in lowercase) violations += \"forbidden-fragment:$fragment\"\n    }\n    return violations.distinct()\n}\n\nprivate fun ExternalTlsEvidenceReportData.toSampleSummary() =\n    ExternalTlsEvidenceSampleSummary(\n        samplesPerPhase = 3,\n        baselineSuccesses = baselineSuccesses,\n        baselineFailures = baselineFailures,\n        strategySuccesses = strategySuccesses,\n        strategyFailures = strategyFailures,\n        recoverySuccesses = recoverySuccesses,\n        recoveryFailures = recoveryFailures,\n        decision = decision,\n        reason = reason,\n    )\n\nprivate fun buildReportId(\n    data: ExternalTlsEvidenceReportData,\n    evidenceClass: String,\n    confidence: String,\n): String {\n    val canonical = listOf(\n        \"schema=2\",\n        \"version=0.3.0-alpha.6\",\n        \"preset=${data.presetId}\",\n        \"port=${data.targetPort ?: 443}\",\n        \"baseline_latency=${data.baselineLatencyMillis ?: -1}\",\n        \"strategy_latency=${data.strategyLatencyMillis ?: -1}\",\n        \"recovery_latency=${data.recoveryLatencyMillis ?: -1}\",\n        \"baseline_record=${data.baselineRecordKind ?: \"UNKNOWN\"}\",\n        \"strategy_record=${data.strategyRecordKind ?: \"UNKNOWN\"}\",\n        \"recovery_record=${data.recoveryRecordKind ?: \"UNKNOWN\"}\",\n        \"baseline=${data.baselineSuccesses}/${data.baselineFailures}\",\n        \"strategy=${data.strategySuccesses}/${data.strategyFailures}\",\n        \"recovery=${data.recoverySuccesses}/${data.recoveryFailures}\",\n        \"decision=${data.decision ?: \"UNKNOWN\"}\",\n        \"reason=${data.reason ?: \"UNKNOWN\"}\",\n        \"gate=${data.gateState ?: \"UNKNOWN\"}\",\n        \"class=$evidenceClass\",\n        \"confidence=$confidence\",\n    ).joinToString(\"\\n\")\n    return MessageDigest.getInstance(\"SHA-256\")\n        .digest(canonical.toByteArray(Charsets.UTF_8))\n        .take(REPORT_ID_BYTES)\n        .joinToString(separator = \"\") { byte -> \"%02x\".format(byte.toInt() and 0xff) }\n}\n\nprivate fun phaseReport(\n    latencyMillis: Long?,\n    recordKind: String?,\n    successes: Int,\n    failures: Int,\n): String = listOfNotNull(\n    \"successes=$successes\",\n    \"failures=$failures\",\n    latencyMillis?.let { \"median_latency_ms=$it\" },\n    recordKind?.let { \"record=$it\" },\n).joinToString(\",\")\n\nprivate const val REPORT_HEADER =\n    \"ConnectX v0.3.0-alpha.6 — TLS strategy evidence report\"\nprivate const val MAX_REPORT_CHARS = 4_096\nprivate const val REPORT_ID_BYTES = 12\n\nprivate val ALLOWED_KEYS = linkedSetOf(\n    \"schema_version\",\n    \"report_id\",\n    \"target_preset\",\n    \"target\",\n    \"route\",\n    \"transport\",\n    \"tls_payload\",\n    \"samples_per_phase\",\n    \"baseline\",\n    \"strategy\",\n    \"recovery\",\n    \"evidence_class\",\n    \"confidence\",\n    \"recommendation\",\n    \"decision\",\n    \"reason\",\n    \"gate\",\n    \"hostname\",\n    \"resolved_ipv4\",\n    \"claim\",\n)\n\nprivate val IPV4_REGEX = Regex(\"\"\"(?<![0-9])(?:[0-9]{1,3}\\.){3}[0-9]{1,3}(?![0-9])\"\"\")\nprivate val FORBIDDEN_FRAGMENTS = listOf(\n    \"http://\",\n    \"https://\",\n    \"authorization\",\n    \"bearer \",\n    \"cookie\",\n    \"token=\",\n    \"@\",\n)\n",
+          )
+          write(
+              "app/src/test/kotlin/dev/connectx/app/evidence/ExternalTlsEvidenceReportTest.kt",
+              "package dev.connectx.app.evidence\n\nimport org.junit.Assert.assertEquals\nimport org.junit.Assert.assertFalse\nimport org.junit.Assert.assertNotEquals\nimport org.junit.Assert.assertTrue\nimport org.junit.Test\n\nclass ExternalTlsEvidenceReportTest {\n    @Test\n    fun reportContainsSchemaAssessmentAndOnlyRedactedTarget() {\n        val report = buildRedactedEvidenceReport(availableData())\n\n        assertTrue(report.contains(\"ConnectX v0.3.0-alpha.6\"))\n        assertTrue(report.contains(\"schema_version=2\"))\n        assertTrue(report.contains(Regex(\"\"\"report_id=[0-9a-f]{24}\"\"\")))\n        assertTrue(report.contains(\"target_preset=telegram\"))\n        assertTrue(report.contains(\"target=redacted-public-host:443\"))\n        assertTrue(report.contains(\"samples_per_phase=3\"))\n        assertTrue(\n            report.contains(\n                \"baseline=successes=3,failures=0,median_latency_ms=120,record=HANDSHAKE\",\n            ),\n        )\n        assertTrue(report.contains(\"evidence_class=AVAILABLE_WITHOUT_STRATEGY\"))\n        assertTrue(report.contains(\"confidence=HIGH\"))\n        assertTrue(report.contains(\"recommendation=STRATEGY_NOT_REQUIRED\"))\n        assertTrue(report.contains(\"hostname=REDACTED\"))\n        assertTrue(report.contains(\"resolved_ipv4=REDACTED\"))\n        assertTrue(report.contains(\"network-specific-repeated-evidence-not-universal-bypass\"))\n        assertTrue(validateRedactedEvidenceReport(report).isEmpty())\n    }\n\n    @Test\n    fun reportIdIsDeterministicAndChangesWithEvidence() {\n        val first = buildRedactedEvidenceReport(availableData())\n        val second = buildRedactedEvidenceReport(availableData())\n        val changed = buildRedactedEvidenceReport(\n            availableData().copy(strategyLatencyMillis = 96L),\n        )\n\n        assertEquals(reportId(first), reportId(second))\n        assertNotEquals(reportId(first), reportId(changed))\n    }\n\n    @Test\n    fun reportCannotReceiveOrLeakHostnameIpPayloadOrErrorText() {\n        val sensitiveValues = listOf(\n            \"blocked.example.org\",\n            \"93.184.216.34\",\n            \"secret-cookie\",\n            \"Bearer token\",\n            \"Connection refused for blocked.example.org\",\n        )\n        val report = buildRedactedEvidenceReport(\n            ExternalTlsEvidenceReportData(\n                presetId = \"custom\",\n                targetPort = null,\n                baselineLatencyMillis = null,\n                strategyLatencyMillis = null,\n                recoveryLatencyMillis = null,\n                baselineRecordKind = null,\n                strategyRecordKind = null,\n                recoveryRecordKind = null,\n                baselineSuccesses = 0,\n                baselineFailures = 3,\n                strategySuccesses = 0,\n                strategyFailures = 3,\n                recoverySuccesses = 0,\n                recoveryFailures = 3,\n                decision = \"ROLLBACK_CONFIRMED\",\n                reason = \"STRATEGY_DID_NOT_RESTORE_RESTRICTED_BASELINE\",\n                gateState = \"COOLDOWN\",\n            ),\n        )\n\n        sensitiveValues.forEach { value ->\n            assertFalse(\"Report leaked: $value\", report.contains(value))\n        }\n        assertTrue(report.contains(\"evidence_class=STRATEGY_NOT_HELPFUL\"))\n        assertTrue(report.contains(\"recommendation=KEEP_STRATEGY_DISABLED\"))\n        assertTrue(validateRedactedEvidenceReport(report).isEmpty())\n    }\n\n    @Test\n    fun validatorRejectsUnknownFieldsRawTargetsAndUrls() {\n        val valid = buildRedactedEvidenceReport(availableData())\n        val unsafe = valid +\n            \"\\nsource_url=https://blocked.example.org/path\" +\n            \"\\nresolved_ipv4=93.184.216.34\"\n\n        val violations = validateRedactedEvidenceReport(unsafe)\n\n        assertTrue(violations.any { it.startsWith(\"unknown-key:\") })\n        assertTrue(violations.contains(\"duplicate-key:resolved_ipv4\"))\n        assertTrue(violations.contains(\"ipv4-not-redacted\"))\n        assertTrue(violations.contains(\"raw-ipv4\"))\n        assertTrue(violations.any { it.startsWith(\"forbidden-fragment:\") })\n    }\n\n    private fun availableData() = ExternalTlsEvidenceReportData(\n        presetId = \"telegram\",\n        targetPort = 443,\n        baselineLatencyMillis = 120L,\n        strategyLatencyMillis = 95L,\n        recoveryLatencyMillis = 118L,\n        baselineRecordKind = \"HANDSHAKE\",\n        strategyRecordKind = \"ALERT\",\n        recoveryRecordKind = \"HANDSHAKE\",\n        baselineSuccesses = 3,\n        baselineFailures = 0,\n        strategySuccesses = 3,\n        strategyFailures = 0,\n        recoverySuccesses = 3,\n        recoveryFailures = 0,\n        decision = \"KEEP_FOR_LAB_SESSION\",\n        reason = \"PASSED_WITHIN_LATENCY_BUDGET\",\n        gateState = \"LAB_APPROVED\",\n    )\n\n    private fun reportId(report: String): String =\n        report.lineSequence()\n            .single { it.startsWith(\"report_id=\") }\n            .substringAfter('=')\n}\n",
+          )
+
+          panel_path = "app/src/main/kotlin/dev/connectx/app/evidence/ExternalTlsEvidencePanel.kt"
+          panel = read(panel_path)
+          old_import = "import dev.connectx.strategy.api.ExternalTlsEvidencePreset\n"
+          new_import = """import dev.connectx.strategy.api.ExternalTlsEvidenceAssessor
+          import dev.connectx.strategy.api.ExternalTlsEvidenceClass
+          import dev.connectx.strategy.api.ExternalTlsEvidenceConfidence
+          import dev.connectx.strategy.api.ExternalTlsEvidencePreset
+          import dev.connectx.strategy.api.ExternalTlsEvidenceRecommendation
+          import dev.connectx.strategy.api.ExternalTlsEvidenceSampleSummary
+          """
+          if old_import not in panel:
+              raise SystemExit("panel import anchor missing")
+          panel = panel.replace(old_import, new_import, 1)
+
+          old_lines = """    state.reason?.let { "Reason: $it" },
+              state.gateState?.let { "Session gate: $it" },
+          )
+          """
+          new_lines = """    evidenceAssessmentLine(state),
+              evidenceRecommendationLine(state),
+              state.reason?.let { "Reason: $it" },
+              state.gateState?.let { "Session gate: $it" },
+          )
+          """
+          if old_lines not in panel:
+              raise SystemExit("panel result anchor missing")
+          panel = panel.replace(old_lines, new_lines, 1)
+
+          helper_anchor = "private fun phaseLine(\n"
+          if helper_anchor not in panel:
+              raise SystemExit("panel helper anchor missing")
+          panel = panel.replace(helper_anchor, "private fun evidenceAssessmentLine(state: ExternalTlsEvidenceUiState): String {\n    val assessment = ExternalTlsEvidenceAssessor.assess(state.toEvidenceSummary())\n    val classText = when (assessment.evidenceClass) {\n        ExternalTlsEvidenceClass.STRATEGY_HELP_CONFIRMED ->\n            \"помощь стратегии подтверждена текущей серией\"\n        ExternalTlsEvidenceClass.AVAILABLE_WITHOUT_STRATEGY ->\n            \"цель доступна без стратегии\"\n        ExternalTlsEvidenceClass.STRATEGY_NOT_HELPFUL ->\n            \"стратегия не помогла или ухудшила результат\"\n        ExternalTlsEvidenceClass.INCONCLUSIVE ->\n            \"данных недостаточно для вывода\"\n    }\n    val confidenceText = when (assessment.confidence) {\n        ExternalTlsEvidenceConfidence.HIGH -> \"высокая\"\n        ExternalTlsEvidenceConfidence.MEDIUM -> \"средняя\"\n        ExternalTlsEvidenceConfidence.LOW -> \"низкая\"\n    }\n    return \"Доказательность: $classText · уверенность $confidenceText\"\n}\n\nprivate fun evidenceRecommendationLine(state: ExternalTlsEvidenceUiState): String {\n    val recommendation = ExternalTlsEvidenceAssessor\n        .assess(state.toEvidenceSummary())\n        .recommendation\n    val text = when (recommendation) {\n        ExternalTlsEvidenceRecommendation.ATTACH_FOR_MANUAL_REVIEW ->\n            \"сохранить обезличенный отчёт и повторить на том же устройстве\"\n        ExternalTlsEvidenceRecommendation.STRATEGY_NOT_REQUIRED ->\n            \"не включать стратегию: baseline уже доступен\"\n        ExternalTlsEvidenceRecommendation.KEEP_STRATEGY_DISABLED ->\n            \"оставить стратегию выключенной\"\n        ExternalTlsEvidenceRecommendation.REPEAT_ON_SAME_NETWORK ->\n            \"повторить полную 3×A/B/A-проверку без смены сети\"\n    }\n    return \"Следующий шаг: $text\"\n}\n\nprivate fun ExternalTlsEvidenceUiState.toEvidenceSummary() =\n    ExternalTlsEvidenceSampleSummary(\n        samplesPerPhase = 3,\n        baselineSuccesses = baselineSuccesses,\n        baselineFailures = baselineFailures,\n        strategySuccesses = strategySuccesses,\n        strategyFailures = strategyFailures,\n        recoverySuccesses = recoverySuccesses,\n        recoveryFailures = recoveryFailures,\n        decision = decision,\n        reason = reason,\n    )\n\n" + helper_anchor, 1)
+          panel = panel.replace(
+              "Alpha.5 выполняет по три попытки baseline, TLS split и recovery. ",
+              "Alpha.6 выполняет по три попытки baseline, TLS split и recovery, " +
+                  "классифицирует доказательность и проверяет отчёт по allow-list schema. ",
+              1,
+          )
+          write(panel_path, panel)
+
+          manifest = {
+              "schema_version": 1,
+              "publish": True,
+              "prerelease": True,
+              "version_name": NEW_VERSION,
+              "version_code": 13,
+              "tag": "v" + NEW_VERSION,
+              "title": "ConnectX v0.3.0-alpha.6 — Evidence Quality Gate",
+              "notes_path": "docs/releases/v0.3.0-alpha.6.md",
+              "scope_path": "docs/roadmap/alpha6-scope.md",
+              "expected_ci_workflow": "Android CI",
+              "expected_ci_event": "push",
+              "expected_branch": "main",
+          }
+          write("release/prerelease.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+
+          readme_path = "README.md"
+          readme = read(readme_path)
+          old_intro = """## Текущая версия разработки: v0.3.0-alpha.5
+
+          Alpha.5 сохраняет повторяемую TLS A/B/A-проверку alpha.4 и переводит выпуск prerelease на единый exact-commit pipeline. Версия приложения, native bridge, README, changelog и release manifest теперь проверяются одной автоматической guard-процедурой.
+          """
+          new_intro = """## Текущая версия разработки: v0.3.0-alpha.6
+
+          Alpha.6 сохраняет repeated TLS A/B/A-проверку и добавляет Evidence Quality Gate: результат получает формальный evidence class, уровень уверенности, безопасную рекомендацию и детерминированный report ID. Перед отправкой обезличенный отчёт проверяется по allow-list schema v2.
+          """
+          if old_intro not in readme:
+              raise SystemExit("README intro anchor missing")
+          readme = readme.replace(old_intro, new_intro, 1)
+
+          old_report = """В интерфейсе показываются success/failure counters, median latency, TLS record kind, decision и reason. Обезличенный отчёт не содержит hostname, IPv4, payload, credentials или raw error text.
+          """
+          new_report = """В интерфейсе показываются success/failure counters, median latency, TLS record kind, decision, reason, evidence class, confidence и безопасный следующий шаг. Обезличенный отчёт schema v2 не получает hostname, IPv4, payload, credentials или raw error text; неизвестные поля, URL и credential-like fragments отклоняются до share intent. Детерминированный `report_id` позволяет сравнить два одинаковых агрегированных результата без сетевого идентификатора.
+          """
+          if old_report not in readme:
+              raise SystemExit("README report anchor missing")
+          readme = readme.replace(old_report, new_report, 1)
+          readme = readme.replace("Полная локальная проверка alpha.5:", "Полная локальная проверка alpha.6:", 1)
+          readme = readme.replace("scripts/verify-alpha5-local.sh", "scripts/verify-alpha6-local.sh")
+          readme = readme.replace(
+              "`v0.3.0-alpha.5` публикуется только после полного Android CI",
+              "`v0.3.0-alpha.6` публикуется только после полного Android CI",
+              1,
+          )
+          write(readme_path, readme)
+
+          changelog_path = "CHANGELOG.md"
+          changelog = read(changelog_path)
+          marker = "## [0.3.0-alpha.5]\n"
+          section = """## [0.3.0-alpha.6]
+
+          ### Added
+
+          - Pure Kotlin evidence assessor for repeated BASELINE/STRATEGY/RECOVERY samples.
+          - Explicit evidence classes, confidence levels and safe recommendations.
+          - Redacted report schema v2 with deterministic 24-hex report IDs.
+          - Allow-list report validation for known fields, redacted target data and bounded output.
+          - Compose result lines explaining evidence quality and the next safe manual action.
+          - Unit tests for restricted-network evidence, ordinary availability, regression, incomplete samples, deterministic IDs and unsafe report mutations.
+          - Application version `0.3.0-alpha.6`, versionCode `13`.
+          - Native bridge version `connectx-go-bridge/0.3.0-alpha.6`.
+
+          ### Changed
+
+          - A positive strategy phase is no longer presented only as a raw decision/reason pair; sample consistency now determines evidence class and confidence.
+          - Shared reports can be deduplicated by aggregate result without including hostname, IPv4 or network identifiers.
+
+          ### Safety boundaries
+
+          - Strategy activation remains manual and lab-only.
+          - TUN capture remains limited to TEST-NET-1 (`192.0.2.0/24`).
+          - Ordinary application traffic is not routed or modified.
+          - No HTTP, account login, token, cookie, response body, MITM or HTTPS decryption is introduced.
+          - Real restricted-network and physical-device validation remains required before closing #11.
+
+          """
+          if marker not in changelog:
+              raise SystemExit("CHANGELOG marker missing")
+          changelog = changelog.replace(marker, section + marker, 1)
+          write(changelog_path, changelog)
+
+          write("docs/releases/v0.3.0-alpha.6.md", "# ConnectX v0.3.0-alpha.6 — Evidence Quality Gate\n\n`v0.3.0-alpha.6` improves how repeated TLS strategy evidence is interpreted and shared. It does not expand routing or claim a universal bypass.\n\n## Added\n\n- Pure Kotlin evidence assessor with four explicit classes:\n  - `STRATEGY_HELP_CONFIRMED`;\n  - `AVAILABLE_WITHOUT_STRATEGY`;\n  - `STRATEGY_NOT_HELPFUL`;\n  - `INCONCLUSIVE`.\n- `HIGH`, `MEDIUM` and `LOW` confidence derived from complete 3×A/B/A sample consistency.\n- Safe next-action recommendations that never enable the strategy automatically.\n- Redacted report schema v2 with deterministic 24-hex `report_id`.\n- Allow-list report validator that rejects unknown fields, raw IPv4, URLs and credential-like fragments.\n- UI lines for evidence class, confidence and recommended next step.\n- Unit tests for confirmed restricted evidence, ordinary availability, regression, incomplete samples, deterministic IDs and unsafe report mutations.\n\n## Validation\n\nThe release remains gated by:\n\n- release manifest and negative provenance tests;\n- all JVM unit tests;\n- Android lint;\n- debug APK and legal/native payload checks;\n- Android 35 strategy, repeated evidence, JNI, TCP, UDP and DNS runtime gates.\n\n## Safety boundary\n\n- Only TEST-NET-1 is routed through the lab TUN.\n- Ordinary application traffic is not processed.\n- No HTTP request, response body, account login, token, cookie, MITM, user CA or HTTPS decryption.\n- The report does not receive hostname, resolved IPv4, payload or raw exception text.\n- A positive result is network-specific evidence for manual review, not automatic activation or a universal bypass claim.\n\n## Remaining blocker\n\nIssue #11 remains open until the strategy is reproduced on a physical device and a real restricted network.\n")
+          write("docs/roadmap/alpha6-scope.md", "# v0.3.0-alpha.6 scope — Evidence Quality Gate\n\n## Goal\n\nTurn raw repeated A/B/A counters into a deterministic, privacy-bounded evidence artifact suitable for manual restricted-network review.\n\n## In scope\n\n- Pure Kotlin classification of complete three-sample BASELINE/STRATEGY/RECOVERY phases.\n- Explicit confidence and safe recommendation enums.\n- Redacted report schema v2.\n- Deterministic report fingerprint based only on aggregate non-secret fields.\n- Structural allow-list validation before a report is shared.\n- Compose presentation of evidence quality and next action.\n- Full version, changelog, release notes and guarded prerelease metadata synchronization.\n\n## Out of scope\n\n- Automatic strategy enablement.\n- Persistent per-network strategy selection.\n- Default IPv4/IPv6 routes.\n- Real application traffic.\n- HTTP diagnostics.\n- Multiple strategy registry.\n- Root, QUIC or IPv6 work.\n- Claiming success without physical-device restricted-network evidence.\n\n## Definition of done\n\n- Assessment and report validator unit tests are green.\n- Existing Android runtime gates remain green.\n- Report ID is deterministic and privacy-safe.\n- Unsafe report mutations are rejected.\n- `v0.3.0-alpha.6` is published from the exact successful `main` CI commit.\n")
+
+          source_verify = Path("scripts/verify-alpha5-local.sh")
+          if not source_verify.is_file():
+              raise SystemExit("alpha5 verification script missing")
+          verify = source_verify.read_text(encoding="utf-8")
+          verify = verify.replace("alpha5", "alpha6").replace("alpha.5", "alpha.6")
+          verify = verify.replace(OLD_VERSION, NEW_VERSION)
+          write("scripts/verify-alpha6-local.sh", verify)
+          Path("scripts/verify-alpha6-local.sh").chmod(0o755)
+
+          remaining = []
+          for directory in ("app", "strategy", "vpn", "engine/go/bridge"):
+              for path in Path(directory).rglob("*"):
+                  if path.is_file() and path.suffix in {".kt", ".kts", ".go"}:
+                      if OLD_VERSION in path.read_text(encoding="utf-8"):
+                          remaining.append(str(path))
+          if remaining:
+              raise SystemExit("stale active version references: " + ", ".join(remaining))
+          PY
+
+      - name: Commit product changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add             app             strategy             vpn             engine/go/bridge             scripts             release/prerelease.json             README.md             CHANGELOG.md             docs/releases/v0.3.0-alpha.6.md             docs/roadmap/alpha6-scope.md
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "Alpha.6 change set already applied"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat(evidence): add alpha.6 quality gate'
+          git push origin HEAD:feature/v0.3.0-alpha6
